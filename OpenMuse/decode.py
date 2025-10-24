@@ -793,18 +793,27 @@ def make_timestamps(
             tick_diff = raw_tick - last_abs_tick
             abs_tick = raw_tick + wrap_offset
 
-            # Only trigger wraparound for LARGE backward jumps (> 10000 seconds)
-            # Small backward jumps (< 1 second) are timing inversions, not wraparounds
-            WRAPAROUND_THRESHOLD = -10000 * DEVICE_CLOCK_HZ  # -10000 seconds in tick
+            # previous raw tick in [0, clock_mod)
+            prev_raw_tick = last_abs_tick % clock_mod
 
-            if abs_tick < last_abs_tick:
-                if tick_diff < WRAPAROUND_THRESHOLD:
-                    # True wraparound: huge backward jump
+            # If raw_tick < prev_raw_tick there are two possibilities:
+            #  - a true wraparound (prev_raw_tick - raw_tick is large, near clock_mod)
+            #  - a small inversion / reordering (prev_raw_tick - raw_tick is small)
+            if raw_tick < prev_raw_tick:
+                # check how large the backward jump is
+                if (prev_raw_tick - raw_tick) > (clock_mod // 2):
+                    # treat as true wraparound - increment offset once
                     wrap_offset += clock_mod
                     abs_tick = raw_tick + wrap_offset
-                # else: small timing inversion, ignore and keep monotonicity
                 else:
-                    abs_tick = last_abs_tick  # Force monotonic
+                    # small inversion / jitter - force monotonicity
+                    abs_tick = last_abs_tick
+            else:
+                # normal forward progress
+                abs_tick = raw_tick + wrap_offset
+                # defensive check: if abs_tick somehow still < last_abs_tick, force monotonicity
+                if abs_tick < last_abs_tick:
+                    abs_tick = last_abs_tick
 
             last_abs_tick = abs_tick
 
