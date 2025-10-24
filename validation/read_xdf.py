@@ -37,7 +37,9 @@ def _create_target_timestamps(stream_data, target_fs):
     return new_timestamps
 
 
-def _interpolate_splat_ffill(stream_data, new_timestamps, all_columns, col_to_idx):
+def _interpolate_splat_ffill(
+    stream_data, new_timestamps, all_columns, col_to_idx, dtype
+):
     """
     Performs a fast "splat" resampling.
 
@@ -47,8 +49,10 @@ def _interpolate_splat_ffill(stream_data, new_timestamps, all_columns, col_to_id
     forward-filled.
     """
     # 1. Create the empty (NaN-filled) data grid
+    # Use np.nan for float, None for object (more appropriate)
+    fill_val = np.nan if np.issubdtype(dtype, np.floating) else None
     resampled_data = np.full(
-        (len(new_timestamps), len(all_columns)), np.nan, dtype=object
+        (len(new_timestamps), len(all_columns)), fill_val, dtype=dtype
     )
 
     # 2. Iterate over each *original* stream and "splat" its data
@@ -113,7 +117,7 @@ def _fill_missing_data(resampled_df, fill_method="ffill", fill_value=0):
 # ========================================================================================
 
 
-def resample_streams(stream_data, target_fs, fill_method="ffill", fill_value=0):
+def _resample_streams(stream_data, target_fs, fill_method="ffill", fill_value=0):
     """
     Resamples and merges multiple XDF streams into a single DataFrame using
     a fast "nearest-neighbor assignment" and "forward-fill" strategy.
@@ -128,28 +132,67 @@ def resample_streams(stream_data, target_fs, fill_method="ffill", fill_value=0):
         pd.DataFrame: A single DataFrame with all streams resampled and merged.
     """
 
-    # 1. Get all column names and create a name-to-index mapping
-    all_columns = []
-    for s in stream_data:
-        all_columns.extend(s["columns"])
-    col_to_idx = {name: i for i, name in enumerate(all_columns)}
+    # 1. Separate streams by type
+    numeric_streams = []
+    object_streams = []
+    numeric_cols = []
+    object_cols = []
 
-    # 2. Create the target *regular* timestamp grid
+    for s in stream_data:
+        if s["is_numeric"]:
+            numeric_streams.append(s)
+            numeric_cols.extend(s["columns"])
+        else:
+            object_streams.append(s)
+            object_cols.extend(s["columns"])
+
+    # Create name-to-index mappings for each type
+    numeric_col_to_idx = {name: i for i, name in enumerate(numeric_cols)}
+    object_col_to_idx = {name: i for i, name in enumerate(object_cols)}
+
+    # 2. Create the target *regular* timestamp grid (once)
     new_ts = _create_target_timestamps(stream_data, target_fs)
 
-    # 3. Splat original data onto the new grid
-    resampled_data = _interpolate_splat_ffill(
-        stream_data, new_ts, all_columns, col_to_idx
-    )
+    final_dfs = []
 
-    # 4. Create the DataFrame
-    # This DataFrame is sparse, containing original values at their
-    # nearest new timestamp, and NaN everywhere else.
-    resampled_df = pd.DataFrame(resampled_data, index=new_ts, columns=all_columns)
-    resampled_df.index.name = "timestamps"
+    # 3. Process NUMERIC data
+    if numeric_streams:
+        numeric_data = _interpolate_splat_ffill(
+            numeric_streams,
+            new_ts,
+            numeric_cols,
+            numeric_col_to_idx,
+            dtype=np.float64,
+        )
+        # Create DataFrame with specific dtype to save memory
+        numeric_df = pd.DataFrame(
+            numeric_data, index=new_ts, columns=numeric_cols, dtype=np.float64
+        )
+        numeric_df = _fill_missing_data(numeric_df, fill_method, fill_value)
+        final_dfs.append(numeric_df)
 
-    # 5. Fill missing values (this is the forward-padding step)
-    resampled_df = _fill_missing_data(resampled_df, fill_method, fill_value)
+    # 4. Process OBJECT data
+    if object_streams:
+        # For object streams, fill with None, not 0, unless user specified something else
+        object_fill_val = None if fill_value == 0 else fill_value
+        object_data = _interpolate_splat_ffill(
+            object_streams,
+            new_ts,
+            object_cols,
+            object_col_to_idx,
+            dtype=object,
+        )
+        object_df = pd.DataFrame(
+            object_data, index=new_ts, columns=object_cols, dtype=object
+        )
+        object_df = _fill_missing_data(object_df, fill_method, object_fill_val)
+        final_dfs.append(object_df)
+
+    # 5. Combine and return
+    if not final_dfs:
+        return pd.DataFrame(index=new_ts)  # Return empty DF if no data
+
+    resampled_df = pd.concat(final_dfs, axis=1)
 
     return resampled_df
 
@@ -186,49 +229,106 @@ def _visual_control(original, resampled, window_start=None, window_length=2.0):
     plt.show()
 
 
-def quality_control(stream, resampled_df, show=False):
+def _quality_control(stream, resampled_df, show=False):
     """
-    Performs a quality control check by plotting the first channel
-    of a given stream against its resampled version.
+    Performs QC by calculating a closeness score (MAE) for all channels
+    in the stream and optionally plotting the first channel.
 
     Args:
         stream (dict): A single stream dictionary from the stream_data list.
         resampled_df (pd.DataFrame): The output of resample_streams.
-        show (bool): If True, generate and show the plot.
+        show (bool): If True, generate and show the plot for the first channel.
+
+    Returns:
+        dict: A dictionary mapping channel names to their MAE scores.
     """
-    if not show:
-        return
-
-    # Don't plot non-numeric streams
     if not stream["is_numeric"]:
-        warnings.warn(f"Skipping QC plot for non-numeric stream: {stream['name']}")
-        return
+        warnings.warn(f"Skipping QC for non-numeric stream: {stream['name']}")
+        return {}
 
-    # Get the name of the first column in this stream
-    col_to_plot = stream["columns"][0]
+    scores = {}
 
-    # Create a pandas Series for the original data of the first channel
-    original = pd.Series(
-        stream["data"][:, 0], index=stream["timestamps"], name=col_to_plot
-    )
-    original.index.name = "timestamps"
+    for i, col_name in enumerate(stream["columns"]):
+        # 1. Get original data for this channel
+        original_ts = stream["timestamps"]
+        original_data = stream["data"][:, i]
 
-    # Find the corresponding column in resampled_df
-    resampled_col_name = None
-    if col_to_plot in resampled_df.columns:
-        resampled_col_name = col_to_plot
-    # Note: The prefixing logic ensures col_to_plot *already* has the prefix
-    # if it was needed. So we just need to check for its existence.
+        # 2. Find the corresponding resampled column
+        if col_name not in resampled_df.columns:
+            warnings.warn(
+                f"Could not find column '{col_name}' in resampled data for QC."
+            )
+            continue
 
-    if resampled_col_name is None:
-        warnings.warn(
-            f"Could not find column '{col_to_plot}' in resampled data for QC plot."
+        resampled_series = resampled_df[col_name]
+        resampled_ts = resampled_series.index
+        resampled_data = resampled_series.values
+
+        # 3. Calculate score: Interpolate original onto resampled time axis
+        # This creates a 1-to-1 comparison for calculating error
+        original_interp = np.interp(
+            resampled_ts,
+            original_ts,
+            original_data,
+            left=np.nan,  # Use NaN for areas where original doesn't cover
+            right=np.nan,
         )
-        return
 
-    resampled = resampled_df[resampled_col_name]
+        # 4. Calculate Mean Absolute Error, ignoring NaNs
+        diff = np.abs(original_interp - resampled_data)
+        mae = np.nanmean(diff)
+        scores[col_name] = mae
 
-    _visual_control(original, resampled, window_start=None, window_length=2.0)
+        # 5. Plot the first channel if show=True
+        if i == 0 and show:
+            # Create a pandas Series for the original data (for plotting)
+            original_series = pd.Series(original_data, index=original_ts, name=col_name)
+            original_series.index.name = "timestamps"
+
+            _visual_control(
+                original_series, resampled_series, window_start=None, window_length=2.0
+            )
+
+    return scores
+
+
+# ========================================================================================
+# Main function
+# ========================================================================================
+def synchronize_streams(
+    stream_data, upsample_factor=2.0, fill_method="ffill", fill_value=0
+):
+    """
+    - upsample_factor: Factor to multiply max nominal srate by.
+    - fill_method: 'ffill', 'bfill', or None
+    - fill_value: Value for remaining NaNs"""
+    # --- Compute Target Sampling Rate ---
+    target_fs = int(np.max([s["nominal_srate"] for s in stream_data]) * upsample_factor)
+
+    print(f"Target sampling rate: {target_fs} Hz")
+
+    # --- Run Resampling ---
+    start_time = time.time()
+    resampled_df = _resample_streams(
+        stream_data, target_fs=target_fs, fill_method=fill_method, fill_value=fill_value
+    )
+    duration = time.time() - start_time
+
+    print(f"Resampling complete in {duration:.2f} seconds.")
+
+    # --- Run Quality Control ---
+    # Plot QC and get score for the first numeric stream
+    print("\n--- Quality Control ---")
+    for stream in stream_data:
+        if stream["is_numeric"]:
+            print(f"Running QC for stream: {stream['name']} (plotting first channel)")
+            scores = _quality_control(stream, resampled_df, show=True)
+            print("Closeness Scores (Mean Absolute Error):")
+            for channel, score in scores.items():
+                print(f"  - {channel}: {score:.4f}")
+            break  # Only run for the first numeric stream
+
+    return resampled_df
 
 
 # ========================================================================================
@@ -237,10 +337,6 @@ def quality_control(stream, resampled_df, show=False):
 
 # --- Configuration ---
 filename = "./test-09.xdf"
-upsample_factor = 2.0  # Factor to multiply max nominal srate by
-# Note: Interpolation method is now fixed to 'splat_ffill'
-fill_method = "ffill"  # 'ffill', 'bfill', or None
-fill_value = 0  # Value for remaining NaNs
 
 # --- Load Data ---
 streams, header = pyxdf.load_xdf(
@@ -260,8 +356,6 @@ for i, stream in enumerate(streams):
 # Drop streams with no timestamps
 streams = [s for s in streams if len(s["time_stamps"]) > 0]
 
-if not streams:
-    raise RuntimeError("No valid streams found in the file.")
 
 # Get smaller time stamp to later use as offset (zero point)
 min_ts = min([min(s["time_stamps"]) for s in streams])
@@ -335,22 +429,10 @@ if duplicate_cols:
         if any(col in duplicate_cols for col in s["columns"]):
             s["columns"] = [f"{s['name']}_{col}" for col in s["columns"]]
 
-# --- Compute Target Sampling Rate ---
-max_nominal_srate = np.max([s["nominal_srate"] for s in stream_data])
-target_fs = int(max_nominal_srate * upsample_factor)
-
-print(f"Max nominal sampling rate: {max_nominal_srate} Hz")
-print(f"Target sampling rate: {target_fs} Hz")
-
-# --- Run Resampling ---
-start_time = time.time()
-resampled_df = resample_streams(
-    stream_data, target_fs=target_fs, fill_method=fill_method, fill_value=fill_value
+# --- Synchronize Streams ---
+resampled_df = synchronize_streams(
+    stream_data,
+    upsample_factor=2.0,
+    fill_method="ffill",
+    fill_value=0,
 )
-end_time = time.time()
-
-print(f"Resampling complete in {end_time - start_time:.2f} seconds.")
-
-
-# --- Run Quality Control ---
-quality_control(stream_data[0], resampled_df, show=True)
