@@ -86,11 +86,18 @@ def main(argv=None):
         default=None,
         help="Optional stream duration in seconds. Omit to stream until interrupted.",
     )
+
+    # This combination of nargs, const, and default achieves the desired API:
+    # - Not present:         ns.record = False (default)
+    # - --record:            ns.record = True (const)
+    # - --record "file.txt": ns.record = "file.txt" (nargs='?')
     p_stream.add_argument(
-        "--outfile",
-        "-o",
-        default=None,
-        help="Optional output JSON file to save decoded EEG and ACC/GYRO samples. Omit to only stream.",
+        "--record",
+        nargs="?",
+        const=True,
+        default=False,
+        help="Record raw BLE packets. If given without a path, saves to 'rawdata_stream_TIMESTAMP.txt'. "
+        "If given with a path (e.g., --record 'myfile.txt'), saves to that file.",
     )
 
     def handle_stream(ns):
@@ -102,7 +109,7 @@ def main(argv=None):
             address=ns.address,
             preset=ns.preset,
             duration=ns.duration,
-            outfile=ns.outfile,
+            record=ns.record,  # 'outfile' parameter removed
             verbose=True,
         )
         return 0

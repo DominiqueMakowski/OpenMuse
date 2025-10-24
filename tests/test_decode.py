@@ -58,7 +58,7 @@ class TestGlobalTimestamping(unittest.TestCase):
         self.assertIsInstance(result, dict)
 
         # Should have all sensor type keys
-        expected_keys = {"EEG", "ACCGYRO", "Optics", "Battery", "Unknown"}
+        expected_keys = {"EEG", "ACCGYRO", "OPTICS", "BATTERY", "Unknown"}
         self.assertEqual(set(result.keys()), expected_keys)
 
         # Each value should be a DataFrame
@@ -210,7 +210,7 @@ class TestDecodeRawdata(unittest.TestCase):
         self.assertIsInstance(result, dict)
 
         # Should have all sensor type keys
-        expected_keys = {"EEG", "ACCGYRO", "Optics", "Battery", "Unknown"}
+        expected_keys = {"EEG", "ACCGYRO", "OPTICS", "BATTERY", "Unknown"}
         self.assertEqual(set(result.keys()), expected_keys)
 
         # Each value should be a DataFrame
@@ -266,7 +266,7 @@ class TestDecodeRawdata(unittest.TestCase):
             messages = [f.readline() for _ in range(10)]
 
         result = decode_rawdata(messages)
-        optics_df = result["Optics"]
+        optics_df = result["OPTICS"]
 
         # Should have data
         if len(optics_df) > 0:
@@ -340,7 +340,7 @@ class TestBattery(unittest.TestCase):
                 messages = [line.strip() for line in f if line.strip()]
 
             result = decode_rawdata(messages)
-            battery_df = result["Battery"]
+            battery_df = result["BATTERY"]
 
             # Should have found at least one battery sample
             self.assertGreater(len(battery_df), 0, f"No battery data found in {key}")
