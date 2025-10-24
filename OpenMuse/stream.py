@@ -375,7 +375,7 @@ async def _stream_async(
 
     def _flush_buffer(sensor_type: str) -> None:
         """Flush reordering buffer for a specific sensor type: sort and push samples to LSL."""
-        nonlocal samples_sent
+        nonlocal samples_sent  # noqa: F824
 
         stream = sensor_streams[sensor_type]
         if len(stream.buffer) == 0:
