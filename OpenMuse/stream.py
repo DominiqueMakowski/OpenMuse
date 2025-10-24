@@ -167,6 +167,7 @@ Three LSL streams are created:
 - Muse_EEG: 8 channels at 256 Hz (EEG + AUX)
 - Muse_ACCGYRO: 6 channels at 52 Hz (accelerometer + gyroscope)
 - Muse_OPTICS: 16 channels at 64 Hz (PPG sensors)
+- Muse_BATTERY: 1 channel at 0.1 Hz (battery percentage)
 
 Each stream includes:
 - Channel labels (from decode.py: EEG_CHANNELS, ACCGYRO_CHANNELS, OPTICS_CHANNELS)
@@ -201,6 +202,7 @@ from .decode import (
     ACCGYRO_CHANNELS,
     EEG_CHANNELS,
     OPTICS_CHANNELS,
+    BATTERY_CHANNELS,
     make_timestamps,
     parse_message,
 )
@@ -214,6 +216,7 @@ from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 EEG_LABELS: tuple[str, ...] = EEG_CHANNELS
 ACCGYRO_LABELS: tuple[str, ...] = ACCGYRO_CHANNELS
 OPTICS_LABELS: tuple[str, ...] = OPTICS_CHANNELS
+BATTERY_LABELS: tuple[str, ...] = BATTERY_CHANNELS
 
 # Buffer duration in seconds
 BUFFER_DURATION_SECONDS = 0.15
@@ -293,13 +296,23 @@ def _build_sensor_streams() -> dict[str, SensorStream]:
 
     optics_outlet = _create_stream_outlet(
         name="Muse_OPTICS",
-        stype="Optics",
+        stype="OPTICS",
         labels=OPTICS_LABELS,
         sfreq=64.0,
         dtype="float32",
         source_id="Muse_OPTICS",
         unit="a.u.",
-        channel_type="Optics",
+        channel_type="OPTICS",
+    )
+
+    battery_outlet = _create_stream_outlet(
+        name="Muse_BATTERY",
+        stype="BATTERY",
+        labels=BATTERY_LABELS,
+        sfreq=0.1,  # Nominal rate from decode.py SENSORS dict
+        dtype="float32",
+        source_id="Muse_BATTERY",
+        unit="percent",
     )
 
     streams = {
@@ -317,12 +330,19 @@ def _build_sensor_streams() -> dict[str, SensorStream]:
             sampling_rate=52.0,
             unit="a.u.",
         ),
-        "Optics": SensorStream(
+        "OPTICS": SensorStream(
             outlet=optics_outlet,
             pad_to_channels=len(OPTICS_LABELS),
             labels=OPTICS_LABELS,
             sampling_rate=64.0,
             unit="a.u.",
+        ),
+        "BATTERY": SensorStream(
+            outlet=battery_outlet,
+            pad_to_channels=len(BATTERY_LABELS),  # Should be 1
+            labels=BATTERY_LABELS,
+            sampling_rate=0.1,
+            unit="percent",
         ),
     }
 
@@ -519,7 +539,8 @@ async def _stream_async(
 
         _queue_samples("EEG", decoded.get("EEG", np.empty((0, 0))), lsl_now)
         _queue_samples("ACCGYRO", decoded.get("ACCGYRO", np.empty((0, 0))), lsl_now)
-        _queue_samples("Optics", decoded.get("Optics", np.empty((0, 0))), lsl_now)
+        _queue_samples("OPTICS", decoded.get("OPTICS", np.empty((0, 0))), lsl_now)
+        _queue_samples("BATTERY", decoded.get("BATTERY", np.empty((0, 0))), lsl_now)
 
     try:
         if verbose:
@@ -589,8 +610,8 @@ async def _stream_async(
             print(
                 "Stream stopped. "
                 + ", ".join(
-                    f"{sensor}: {samples_sent[sensor]} samples"
-                    for sensor in ("EEG", "ACCGYRO", "Optics")
+                    f"{sensor}: {count} samples"
+                    for sensor, count in samples_sent.items()
                 )
             )
 
