@@ -156,10 +156,7 @@ device's accurate 256 kHz clock timing.
 **VERIFICATION:**
 
 When loading XDF files with pyxdf:
-- Use synchronize_clocks=True for multi-device sync (e.g., Muse + other devices)
 - Use dejitter_timestamps=False for actual timestamp quality
-- Expected result: 0% non-monotonic, uniform intervals at nominal sampling rates
-- Timestamp intervals should match device rates within 0.2% error
 
 LSL Stream Configuration:
 -------------------------

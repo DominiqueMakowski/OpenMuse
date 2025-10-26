@@ -18,69 +18,182 @@ import matplotlib.pyplot as plt
 # ========================================================================================
 
 
-def _create_target_timestamps(stream_data, target_fs):
+# def _create_timestamps(stream_data, target_fs):
+#     """
+#     Creates a new, regularly spaced timestamp vector based on the global
+#     min/max time of all streams and the target sampling rate.
+#     """
+#     if target_fs <= 0:
+#         raise ValueError("target_fs must be positive.")
+
+#     dt = 1.0 / target_fs
+
+#     # Find the global time range
+#     global_min_ts = min([s["timestamps"].min() for s in stream_data])
+#     global_max_ts = max([s["timestamps"].max() for s in stream_data])
+
+#     # Create the new timestamp vector
+#     new_timestamps = np.arange(global_min_ts, global_max_ts + dt, dt)
+#     return new_timestamps
+
+
+def _create_timestamps(stream_data, target_fs):
     """
-    Creates a new, regularly spaced timestamp vector based on the global
-    min/max time of all streams and the target sampling rate.
+    Creates a new, regularly spaced timestamp vector "anchored" to the
+    stream with the highest effective sampling rate.
+
+    This minimizes interpolation error for the fastest stream by aligning
+    the new grid's phase with its existing timestamps. The grid is
+    guaranteed to cover the global min/max time of all streams.
     """
     if target_fs <= 0:
         raise ValueError("target_fs must be positive.")
 
     dt = 1.0 / target_fs
 
-    # Find the global time range
+    # 1. Find the global time range (still needed)
     global_min_ts = min([s["timestamps"].min() for s in stream_data])
     global_max_ts = max([s["timestamps"].max() for s in stream_data])
 
-    # Create the new timestamp vector
-    new_timestamps = np.arange(global_min_ts, global_max_ts + dt, dt)
+    # 2. Find the "reference" stream (highest effective srate)
+    #    We check for len > 1 to avoid divide-by-zero on effective_srate
+    #    for single-sample streams.
+    try:
+        ref_stream = max(
+            [s for s in stream_data if len(s["timestamps"]) > 1],
+            key=lambda s: s["effective_srate"],
+        )
+        anchor_ts = ref_stream["timestamps"][0]
+
+    except ValueError:
+        # Fallback: No streams have > 1 sample.
+        # Revert to the original "ignorant" grid behavior.
+        warnings.warn(
+            "Could not find a reference stream with > 1 sample. "
+            "Reverting to un-anchored grid."
+        )
+        anchor_ts = global_min_ts
+
+    # 3. Calculate the new start time based on the anchor
+    #    We need to find a t_start that is <= global_min_ts
+    #    AND is an integer number of steps (dt) away from the anchor.
+
+    # Calculate how far back from the anchor we need to go
+    time_before_anchor = anchor_ts - global_min_ts
+
+    # Calculate how many steps (dt) this requires, rounding *up*
+    # to ensure we at least cover the global_min_ts.
+    # We add a small epsilon to handle potential float precision issues
+    # where (time_before_anchor / dt) is *exactly* an integer.
+    epsilon = 1e-9
+    steps_back = np.ceil((time_before_anchor / dt) + epsilon)
+
+    # Calculate the new, aligned start time
+    t_start = anchor_ts - (steps_back * dt)
+
+    # 4. Create the new timestamp vector
+    #    The 'stop' condition (global_max_ts + dt) ensures the
+    #    last point is >= global_max_ts.
+    new_timestamps = np.arange(t_start, global_max_ts + dt, dt)
+
     return new_timestamps
 
 
-def _interpolate_splat_ffill(
-    stream_data, new_timestamps, all_columns, col_to_idx, dtype
-):
-    """
-    Performs a fast "splat" resampling.
+# ========================================================================================
+# NOTE: _interpolate_splat_ffill has been removed as it is no longer
+# required. All streams are numeric and are handled by _interpolate_streams.
+# ========================================================================================
 
-    Each sample in the original streams is "splatted" onto its nearest
-    timestamp in the new_timestamps grid. This is very fast and vectorized.
-    The resulting grid is sparse (mostly NaN) and is intended to be
-    forward-filled.
-    """
-    # 1. Create the empty (NaN-filled) data grid
-    # Use np.nan for float, None for object (more appropriate)
-    fill_val = np.nan if np.issubdtype(dtype, np.floating) else None
-    resampled_data = np.full(
-        (len(new_timestamps), len(all_columns)), fill_val, dtype=dtype
-    )
 
-    # 2. Iterate over each *original* stream and "splat" its data
-    for s in stream_data:
-        # Find the nearest index in new_timestamps for each original timestamp
-        insertion_indices = np.searchsorted(
-            new_timestamps, s["timestamps"], side="left"
+def _interpolate_streams(stream_data, new_timestamps, all_columns, col_to_idx, dtype):
+    """
+    Performs efficient interpolation for all numeric streams.
+
+    It dynamically chooses the interpolation method per stream:
+    - 'linear': For streams with > 2 unique values (continuous data).
+    - 'previous': For streams with <= 2 unique values (event markers).
+
+    Args:
+        stream_data (list): List of stream dictionaries (numeric only).
+        new_timestamps (np.ndarray): The target regular timestamp grid.
+        all_columns (list): List of all column names for the output array.
+        col_to_idx (dict): Map of column name to output array index.
+        dtype (type): The dtype for the output. Must be a floating type.
+
+    Returns:
+        np.ndarray: A (len(new_timestamps), len(all_columns)) array with
+                    interpolated data.
+    """
+    # This function is only intended for numeric data.
+    if not np.issubdtype(dtype, np.floating):
+        raise ValueError(
+            "_interpolate_streams can only be used for numeric (float) dtypes."
         )
 
-        # Get indices of new timestamps to the left and right
-        left_indices = np.clip(insertion_indices - 1, 0, len(new_timestamps) - 1)
-        right_indices = np.clip(insertion_indices, 0, len(new_timestamps) - 1)
+    # 1. Create the empty (NaN-filled) data grid
+    resampled_data = np.full(
+        (len(new_timestamps), len(all_columns)), np.nan, dtype=np.float64
+    )
 
-        # Get the actual new timestamps
-        left_ts = new_timestamps[left_indices]
-        right_ts = new_timestamps[right_indices]
-
-        # Find which of the two is closer
-        is_left_closer = (s["timestamps"] - left_ts) <= (right_ts - s["timestamps"])
-        closest_indices = np.where(is_left_closer, left_indices, right_indices)
-
-        # Get the column indices for this stream
+    # 2. Iterate over each *original* stream and interpolate
+    for s in stream_data:
+        original_ts = s["timestamps"]
+        original_data = s["data"]
         col_indices = [col_to_idx[c] for c in s["columns"]]
 
-        # "Splat" the data into the grid at the nearest timestamps.
-        # This is a many-to-one mapping; if multiple original samples map
-        # to the same new timestamp, the last one wins.
-        resampled_data[closest_indices[:, np.newaxis], col_indices] = s["data"]
+        # Handle edge case: stream with 0 or 1 samples
+        if len(original_ts) < 2:
+            if len(original_ts) == 1:
+                # Fallback to "splat" (nearest) for single points
+                insertion_idx = np.searchsorted(
+                    new_timestamps, original_ts[0], side="left"
+                )
+                left_idx = np.clip(insertion_idx - 1, 0, len(new_timestamps) - 1)
+                right_idx = np.clip(insertion_idx, 0, len(new_timestamps) - 1)
+                is_left_closer = (original_ts[0] - new_timestamps[left_idx]) <= (
+                    new_timestamps[right_idx] - original_ts[0]
+                )
+                closest_idx = left_idx if is_left_closer else right_idx
+                resampled_data[closest_idx, col_indices] = original_data[0]
+            continue  # Skip to next stream
+
+        # --- Determine interpolation kind based on unique values ---
+        # This implements the "event marker" logic.
+        num_unique = np.unique(s["data"]).size
+        if num_unique > 2:
+            interp_kind = "linear"
+        else:
+            # Use 'previous' (forward-fill / zero-order hold)
+            # for streams with <= 2 unique values (e.g., event markers)
+            interp_kind = "previous"
+
+        # --- Use scipy.interpolate.interp1d for efficiency ---
+        # This interpolates all channels in the stream at once (axis=0).
+        # bounds_error=False and fill_value=np.nan ensures that
+        # new_timestamps outside the range of original_ts become NaN.
+        try:
+            interpolator = scipy.interpolate.interp1d(
+                original_ts,
+                original_data,
+                axis=0,
+                kind=interp_kind,  # <-- Use dynamic kind
+                bounds_error=False,
+                fill_value=np.nan,
+            )
+
+            # Apply the interpolator to the new timestamps
+            interpolated_data_block = interpolator(new_timestamps)
+
+            # Place the interpolated data block into the final grid
+            resampled_data[:, col_indices] = interpolated_data_block
+
+        except ValueError as e:
+            # This can happen if timestamps are not monotonically increasing
+            warnings.warn(
+                f"Interpolation failed for stream '{s['name']}'. "
+                f"Timestamps may not be monotonic. Skipping. Error: {e}"
+            )
+            continue
 
     return resampled_data
 
@@ -120,7 +233,7 @@ def _fill_missing_data(resampled_df, fill_method="ffill", fill_value=0):
 def _resample_streams(stream_data, target_fs, fill_method="ffill", fill_value=0):
     """
     Resamples and merges multiple XDF streams into a single DataFrame using
-    a fast "nearest-neighbor assignment" and "forward-fill" strategy.
+    dynamic interpolation (linear or 'previous') and forward-filling.
 
     Args:
         stream_data (list): List of stream dictionaries from the loading phase.
@@ -131,68 +244,29 @@ def _resample_streams(stream_data, target_fs, fill_method="ffill", fill_value=0)
     Returns:
         pd.DataFrame: A single DataFrame with all streams resampled and merged.
     """
-
-    # 1. Separate streams by type
-    numeric_streams = []
-    object_streams = []
-    numeric_cols = []
-    object_cols = []
-
-    for s in stream_data:
-        if s["is_numeric"]:
-            numeric_streams.append(s)
-            numeric_cols.extend(s["columns"])
-        else:
-            object_streams.append(s)
-            object_cols.extend(s["columns"])
+    # Unpack column names
+    cols = [col for s in stream_data for col in s["columns"]]
 
     # Create name-to-index mappings for each type
-    numeric_col_to_idx = {name: i for i, name in enumerate(numeric_cols)}
-    object_col_to_idx = {name: i for i, name in enumerate(object_cols)}
+    col_to_idx = {name: i for i, name in enumerate(cols)}
 
-    # 2. Create the target *regular* timestamp grid (once)
-    new_ts = _create_target_timestamps(stream_data, target_fs)
+    # Create the target *regular* timestamp grid (once)
+    new_ts = _create_timestamps(stream_data, target_fs)
 
-    final_dfs = []
+    # Process all streams using the dynamic interpolation function
+    data = _interpolate_streams(
+        stream_data,
+        new_ts,
+        cols,
+        col_to_idx,
+        dtype=np.float64,
+    )
 
-    # 3. Process NUMERIC data
-    if numeric_streams:
-        numeric_data = _interpolate_splat_ffill(
-            numeric_streams,
-            new_ts,
-            numeric_cols,
-            numeric_col_to_idx,
-            dtype=np.float64,
-        )
-        # Create DataFrame with specific dtype to save memory
-        numeric_df = pd.DataFrame(
-            numeric_data, index=new_ts, columns=numeric_cols, dtype=np.float64
-        )
-        numeric_df = _fill_missing_data(numeric_df, fill_method, fill_value)
-        final_dfs.append(numeric_df)
+    # Create DataFrame with specific dtype to save memory
+    resampled_df = pd.DataFrame(data, index=new_ts, columns=cols, dtype=np.float64)
 
-    # 4. Process OBJECT data
-    if object_streams:
-        # For object streams, fill with None, not 0, unless user specified something else
-        object_fill_val = None if fill_value == 0 else fill_value
-        object_data = _interpolate_splat_ffill(
-            object_streams,
-            new_ts,
-            object_cols,
-            object_col_to_idx,
-            dtype=object,
-        )
-        object_df = pd.DataFrame(
-            object_data, index=new_ts, columns=object_cols, dtype=object
-        )
-        object_df = _fill_missing_data(object_df, fill_method, object_fill_val)
-        final_dfs.append(object_df)
-
-    # 5. Combine and return
-    if not final_dfs:
-        return pd.DataFrame(index=new_ts)  # Return empty DF if no data
-
-    resampled_df = pd.concat(final_dfs, axis=1)
+    # Fill NaNs (e.g., at the beginning) and return
+    resampled_df = _fill_missing_data(resampled_df, fill_method, fill_value)
 
     return resampled_df
 
@@ -202,8 +276,20 @@ def _resample_streams(stream_data, target_fs, fill_method="ffill", fill_value=0)
 # ========================================================================================
 
 
-def _visual_control(original, resampled, window_start=None, window_length=2.0):
-    """Helper for plotting a window of original vs. resampled data."""
+def _visual_control(original, resampled, window_start=None, window_length=2.0, ax=None):
+    """
+    Helper for plotting a window of original vs. resampled data.
+    If 'ax' is provided, it plots onto that axis.
+    Otherwise, it creates a new figure and axis.
+    """
+    # If no axis is provided, create a new figure and axis
+    # This maintains old behavior
+    show_plot = False
+    if ax is None:
+        plt.figure(figsize=(15, 5))
+        ax = plt.gca()  # Get current axis
+        show_plot = True  # We are responsible for plt.show()
+
     if window_start is None:
         # Default to plotting a window in the middle of the data
         window_start = original.index[int(len(original) / 2)]
@@ -215,18 +301,19 @@ def _visual_control(original, resampled, window_start=None, window_length=2.0):
         (resampled.index >= window_start) & (resampled.index <= window_end)
     ]
 
-    plt.figure(figsize=(15, 5))
-    plt.plot(signal.index, signal, "o-", label="original", alpha=0.7, markersize=3)
-    # Changed to '.-' to show individual new samples
-    plt.plot(
+    ax.plot(signal.index, signal, "o-", label="original", alpha=0.7, markersize=3)
+    ax.plot(
         resampled.index, resampled, ".-", label="resampled", alpha=0.7, markersize=2
     )
-    plt.legend()
-    plt.title(f"Visual Control: {original.name}")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Amplitude")
-    plt.grid(True)
-    plt.show()
+    ax.legend()
+    ax.set_title(f"Visual Control: {original.name}")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Amplitude")
+    ax.grid(True)
+
+    # If we created the figure, we must show it.
+    if show_plot:
+        plt.show()
 
 
 def _quality_control(stream, resampled_df, show=False):
@@ -242,10 +329,6 @@ def _quality_control(stream, resampled_df, show=False):
     Returns:
         dict: A dictionary mapping channel names to their MAE scores.
     """
-    if not stream["is_numeric"]:
-        warnings.warn(f"Skipping QC for non-numeric stream: {stream['name']}")
-        return {}
-
     scores = {}
 
     for i, col_name in enumerate(stream["columns"]):
@@ -266,18 +349,45 @@ def _quality_control(stream, resampled_df, show=False):
 
         # 3. Calculate score: Interpolate original onto resampled time axis
         # This creates a 1-to-1 comparison for calculating error
-        original_interp = np.interp(
-            resampled_ts,
-            original_ts,
-            original_data,
-            left=np.nan,  # Use NaN for areas where original doesn't cover
-            right=np.nan,
-        )
+
+        # --- Determine interpolation kind for QC comparison ---
+        # We must use the *same* interpolation method for the QC check
+        # as was used in the resampling step.
+        num_unique = np.unique(stream["data"]).size
+        if num_unique > 2:
+            # For linear, we np.interp (which is linear)
+            original_interp = np.interp(
+                resampled_ts,
+                original_ts,
+                original_data,
+                left=np.nan,  # Use NaN for areas where original doesn't cover
+                right=np.nan,
+            )
+        else:
+            # For 'previous', we must use 'previous'
+            interp_func = scipy.interpolate.interp1d(
+                original_ts,
+                original_data,
+                kind="previous",
+                bounds_error=False,
+                fill_value=np.nan,
+            )
+            original_interp = interp_func(resampled_ts)
 
         # 4. Calculate Mean Absolute Error, ignoring NaNs
-        diff = np.abs(original_interp - resampled_data)
+        diff = (original_interp - resampled_data) ** 2
         mae = np.nanmean(diff)
-        scores[col_name] = mae
+
+        # 5. Calculate Normalized MAE (as a ratio)
+        signal_range = np.nanmax(original_data) - np.nanmin(original_data)
+
+        if signal_range > 1e-9:  # Avoid division by zero for constant signals
+            normalized_mae = mae / signal_range
+        else:
+            # If range is zero, MAE should also be zero (or near-zero)
+            normalized_mae = 0.0 if np.allclose(mae, 0) else np.inf
+
+        scores[col_name] = normalized_mae
 
         # 5. Plot the first channel if show=True
         if i == 0 and show:
@@ -285,6 +395,7 @@ def _quality_control(stream, resampled_df, show=False):
             original_series = pd.Series(original_data, index=original_ts, name=col_name)
             original_series.index.name = "timestamps"
 
+            # This will create its own figure by default
             _visual_control(
                 original_series, resampled_series, window_start=None, window_length=2.0
             )
@@ -296,12 +407,20 @@ def _quality_control(stream, resampled_df, show=False):
 # Main function
 # ========================================================================================
 def synchronize_streams(
-    stream_data, upsample_factor=2.0, fill_method="ffill", fill_value=0
+    stream_data,
+    upsample_factor=2.0,
+    fill_method="ffill",
+    fill_value=0,
+    show=None,
+    window_start=None,
 ):
     """
     - upsample_factor: Factor to multiply max nominal srate by.
     - fill_method: 'ffill', 'bfill', or None
-    - fill_value: Value for remaining NaNs"""
+    - fill_value: Value for remaining NaNs
+    - show (list or None): List of channel names to plot on a single figure.
+                           If None, no plots are generated.
+    """
     # --- Compute Target Sampling Rate ---
     target_fs = int(np.max([s["nominal_srate"] for s in stream_data]) * upsample_factor)
 
@@ -317,16 +436,77 @@ def synchronize_streams(
     print(f"Resampling complete in {duration:.2f} seconds.")
 
     # --- Run Quality Control ---
-    # Plot QC and get score for the first numeric stream
+    # Get scores for each stream, but disable plotting from here (show=False)
     print("\n--- Quality Control ---")
     for stream in stream_data:
-        if stream["is_numeric"]:
-            print(f"Running QC for stream: {stream['name']} (plotting first channel)")
-            scores = _quality_control(stream, resampled_df, show=True)
-            print("Closeness Scores (Mean Absolute Error):")
-            for channel, score in scores.items():
-                print(f"  - {channel}: {score:.4f}")
-            break  # Only run for the first numeric stream
+        print(f"Running QC for stream: {stream['name']}")
+        # Call QC to get scores, but NOT to plot (show=False)
+        scores = _quality_control(stream, resampled_df, show=False)
+
+        # Calculate and print only the average score
+        all_scores = list(scores.values())
+        # Calculate average, ignoring potential NaNs/Infs
+        avg_score = np.nanmean([s for s in all_scores if np.isfinite(s)])
+
+        print(f"  - Average N-MAE: {avg_score}\n")
+
+    # --- Custom Subplot Generation ---
+    if show is not None and isinstance(show, list) and len(show) > 0:
+        print(f"\nGenerating custom plot for {len(show)} specified channels...")
+
+        if window_start is None:
+            window_start = resampled_df.index[int(len(resampled_df) / 2)]
+
+        n_plots = len(show)
+        # Create a figure with N subplots, sharing the X-axis
+        fig, axes = plt.subplots(n_plots, 1, figsize=(15, 4 * n_plots), sharex=True)
+
+        # Ensure 'axes' is always an iterable array, even if n_plots=1
+        if n_plots == 1:
+            axes = [axes]
+
+        # Build a lookup map for original stream data (more efficient)
+        original_data_map = {}
+        for s in stream_data:
+            for i, col_name in enumerate(s["columns"]):
+                original_data_map[col_name] = {
+                    "timestamps": s["timestamps"],
+                    "data": s["data"][:, i],
+                }
+
+        # Plot each requested channel on its subplot
+        for ax, channel_name in zip(axes, show):
+            if (
+                channel_name not in original_data_map
+                or channel_name not in resampled_df.columns
+            ):
+                warnings.warn(
+                    f"Channel '{channel_name}' not found in data. Skipping plot."
+                )
+                ax.set_title(f"Channel '{channel_name}' - NOT FOUND")
+                ax.grid(True)
+                continue
+
+            # Get original data and create Series
+            original_info = original_data_map[channel_name]
+            original_series = pd.Series(
+                original_info["data"],
+                index=original_info["timestamps"],
+                name=channel_name,
+            )
+            original_series.index.name = "timestamps"
+
+            # Get resampled data (it's already a Series)
+            resampled_series = resampled_df[channel_name]
+
+            # Call the visual control helper, passing the specific axis
+            _visual_control(
+                original_series, resampled_series, ax=ax, window_start=window_start
+            )
+
+        # Tidy up the figure
+        fig.tight_layout()
+        plt.show()
 
     return resampled_df
 
@@ -336,7 +516,8 @@ def synchronize_streams(
 # ========================================================================================
 
 # --- Configuration ---
-filename = "./test-09.xdf"
+filename = "./test-10.xdf"
+dejitter_timestamps = ["OpenSignals"]
 
 # --- Load Data ---
 streams, header = pyxdf.load_xdf(
@@ -345,6 +526,39 @@ streams, header = pyxdf.load_xdf(
     handle_clock_resets=True,
     dejitter_timestamps=False,
 )
+
+# De-jitter timestamps for specified streams
+streams_to_dejitter = []
+for i, s in enumerate(streams):
+    name = s["info"].get("name", ["Unnamed"])[0]
+    if name in dejitter_timestamps:
+        streams_to_dejitter.append(i)
+if len(streams_to_dejitter) > 0:
+    streams2, _ = pyxdf.load_xdf(
+        filename,
+        synchronize_clocks=True,
+        handle_clock_resets=True,
+        dejitter_timestamps=True,
+    )
+    for i in streams_to_dejitter:
+        streams[i] = streams2[i]
+
+
+# TEMPORARY HOTFIX FOR test-10.xdf
+for i, s in enumerate(streams):
+    name = s["info"].get("name", ["Unnamed"])[0]
+    if "Muse_" in name:
+        ts = s["time_stamps"]
+        diffs = np.diff(s["time_stamps"])
+        if max(diffs) > 100 * np.median(diffs):
+            print(f"Hotfix: Adjusting timestamps for stream {i} - {name}")
+            # Find indices where large jumps occur
+            jump_indices = np.where(diffs > 1000 * np.median(diffs))[0]
+            # Replace with median
+            for idx in jump_indices:
+                streams[i]["time_stamps"][idx + 1 :] = (
+                    ts[idx + 1 :] - diffs[idx] + np.median(diffs)
+                )
 
 # --- Pre-processing & Sanity Checks ---
 
@@ -389,12 +603,40 @@ for stream in streams:
 
     # If duplicate timestamps exist, take last occurrence
     unique_ts, unique_indices = np.unique(timestamps, return_index=True)
-    data = np.array([data[i] for i in unique_indices])
+    # Use efficient numpy indexing instead of list comprehension
+    data = data[unique_indices]
     timestamps = unique_ts
 
     # Ensure data is 2D
     if data.ndim == 1:
         data = data.reshape(-1, 1)
+
+    # --- Ensure data is numeric ---
+    if not np.issubdtype(data.dtype, np.number):
+        # Data is not numeric (e.g., object type with strings). Process column by column.
+        processed_cols = []
+        for col_idx in range(data.shape[1]):
+            column_data = data[:, col_idx]
+            try:
+                # 1. Try to convert to numeric (e.g., "0", "1.5")
+                processed_cols.append(column_data.astype(float))
+            except (ValueError, TypeError):
+                # 2. Failed: map unique strings to integers
+                warnings.warn(
+                    f"Stream '{name}', column {col_idx} has non-numeric strings. "
+                    f"Converting to integers by alphabetical order."
+                )
+                # Find unique, sorted strings
+                unique_strings = sorted(np.unique(column_data.astype(str)))
+                # Create mapping
+                string_to_int_map = {s: i for i, s in enumerate(unique_strings)}
+                # Apply mapping
+                mapped_col = np.array([string_to_int_map[s] for s in column_data])
+                processed_cols.append(mapped_col)
+
+        # Recombine columns into a 2D numpy array
+        data = np.stack(processed_cols, axis=1)
+    # --- End of new block ---
 
     if data.shape[0] != len(timestamps):
         warnings.warn(f"Data shape mismatch for stream {name} after unique. Skipping.")
@@ -412,7 +654,6 @@ for stream in streams:
                 if len(timestamps) > 1
                 else 0
             ),
-            "is_numeric": np.issubdtype(data.dtype, np.number),
         }
     )
 
@@ -430,9 +671,69 @@ if duplicate_cols:
             s["columns"] = [f"{s['name']}_{col}" for col in s["columns"]]
 
 # --- Synchronize Streams ---
-resampled_df = synchronize_streams(
+df = synchronize_streams(
     stream_data,
     upsample_factor=2.0,
     fill_method="ffill",
     fill_value=0,
+    show=[
+        "CHANNEL_0",
+        "LUX2",
+        "ACC_X",
+        "EEG_AF8",
+        "OPTICS_LO_NIR",
+        "ECGBIT1",
+        "PULSEOXI3",
+    ],  # Pass the list of channels to plot
+    window_start=835.5,  # df.index[int(len(df) / 2)]
 )
+
+
+# Find events
+# df.iloc[200000:300000].plot(y=["LUX2", "CHANNEL_0"], figsize=(15, 5), subplots=True)
+lux_events = nk.events_find(
+    df["LUX2"], threshold_keep="below", duration_min=100, duration_max=5000
+)
+jspsych_events = nk.events_find(
+    df["CHANNEL_0"], threshold_keep="above", duration_min=100, duration_max=5000
+)
+heartbeats = nk.ecg_findpeaks(df["ECGBIT1"], sampling_rate=2000)["ECG_R_Peaks"]
+
+# Preprocess
+df["EEG_AF8"] = df["EEG_AF8"] - df[["EEG_TP9", "EEG_TP10"]].mean(axis=1).values
+df["EEG_AF7"] = df["EEG_AF7"] - df[["EEG_TP9", "EEG_TP10"]].mean(axis=1).values
+df["EEG_AF8"] = nk.signal_filter(
+    df["EEG_AF8"], sampling_rate=2000, lowcut=1.0, highcut=40.0
+)
+df["EEG_AF7"] = nk.signal_filter(
+    df["EEG_AF7"], sampling_rate=2000, lowcut=1.0, highcut=40.0
+)
+df["OPTICS_RI_RED"] = nk.signal_filter(
+    df["OPTICS_RI_RED"], sampling_rate=2000, lowcut=0.2, highcut=40.0
+)
+
+df["EEG_AF"] = df[["EEG_AF7", "EEG_AF8"]].mean(axis=1).values
+
+# Create epochs
+epochs = nk.epochs_create(
+    df,
+    events=heartbeats,
+    sampling_rate=2000,
+    epochs_start=-0.6,
+    epochs_end=2,
+)
+grand_av = nk.epochs_average(
+    epochs,
+    which=["EEG_AF8", "ECGBIT1", "PULSEOXI3", "OPTICS_RI_RED"],
+    indices=["mean", "std", "ci"],
+    show=False,
+)
+grand_av.plot(
+    x="Time",
+    y=["EEG_AF8_Mean", "ECGBIT1_Mean", "PULSEOXI3_Mean", "OPTICS_RI_RED_Mean"],
+    figsize=(10, 5),
+    subplots=True,
+)
+
+# df.iloc[200000:210000].plot(y=["OPTICS_RI_RED"], figsize=(15, 5), subplots=True)
+df.columns
