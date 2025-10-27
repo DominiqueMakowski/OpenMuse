@@ -773,10 +773,10 @@ def make_timestamps(
 
         # Initialize rolling state for this sensor stream if not provided
         if base_time is None:
-            # For streaming applications, use 0 as base_time to make timestamps relative
-            # to when streaming started, not when device booted. This eliminates the
-            # need for re-anchoring in LSL streaming while preserving device timing precision.
-            base_time = 0.0
+            # Use the device's first tick as the base_time
+            # This makes all timestamps relative to the device's boot clock,
+            # allowing LSL/pyxdf to perform full clock-drift correction.
+            base_time = first_raw_tick / DEVICE_CLOCK_HZ
             wrap_offset = 0
             last_abs_tick = first_raw_tick
             sample_counter = 0

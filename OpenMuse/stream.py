@@ -403,23 +403,13 @@ async def _stream_async(
         all_timestamps = np.concatenate([ts for ts, _ in stream.buffer])
         all_data = np.vstack([data for _, data in stream.buffer])
 
-        # Sort by timestamp
+        # Sort by timestamp (in device time)
         sort_indices = np.argsort(all_timestamps)
         sorted_timestamps = all_timestamps[sort_indices]
         sorted_data = all_data[sort_indices]
 
-        # Re-anchor timestamps
-        lsl_now = local_clock()
-        first_timestamp = sorted_timestamps[0]
-
-        if first_timestamp >= lsl_now - 30.0:
-            anchored_timestamps = sorted_timestamps
-        else:
-            time_span = sorted_timestamps[-1] - first_timestamp
-            expected_age = time_span + BUFFER_DURATION_SECONDS / 2
-            anchor_time = lsl_now - expected_age
-            timestamp_shift = anchor_time - first_timestamp
-            anchored_timestamps = sorted_timestamps + timestamp_shift
+        # Timestamps are in device time, no re-anchoring needed.
+        anchored_timestamps = sorted_timestamps
 
         # Push to LSL
         try:
@@ -470,18 +460,10 @@ async def _stream_async(
 
         device_times = data_array[:, 0]
 
-        # Compute device-to-LSL time offset on first packet (ANY sensor)
-        if device_to_lsl_offset is None:
-            device_to_lsl_offset = lsl_now - device_times[0]
-            if verbose:
-                print(
-                    f"Initialized global time offset: "
-                    f"{device_to_lsl_offset:.3f} seconds (from {sensor_type})"
-                )
-
-        # Convert device timestamps to LSL time
-        lsl_timestamps = device_times + device_to_lsl_offset
-        stream.buffer.append((lsl_timestamps, samples))
+        # Timestamps are in device time (from decode.py).
+        # LSL will automatically pair them with its own clock,
+        # allowing pyxdf to correct for clock drift.
+        stream.buffer.append((device_times, samples))
 
         if stream.last_push_time is None:
             stream.last_push_time = lsl_now
