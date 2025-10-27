@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 # Contains .xdf files recorded with LabRecorder, containing Muse data streams (recorded using the stream function, preset 1041) and a Bitalino stream with ECG and Photosensor data.
 # Was recorded during a face presentation experiment.
-filename = "./test-10.xdf"
+filename = "./test-11.xdf"
 upsample = 2.0
 fillmissing = None
 
@@ -61,8 +61,9 @@ plt.show()
 # ========================================================================================
 # Investigate issues with time synchronization
 # ========================================================================================
-plt.plot(streams[2]["time_stamps"], label="Timestamps")
+plt.plot(streams[0]["time_stamps"], label="Timestamps")
 np.diff(streams[2]["time_stamps"]).max()
+
 # ========================================================================================
 # Test the proximity of eletronic markers vs. Photosensor ones
 # ========================================================================================

@@ -515,8 +515,14 @@ def synchronize_streams(
 # Main Script Execution
 # ========================================================================================
 
+# --- Check raw data ---
+import OpenMuse
+
+
+
+
 # --- Configuration ---
-filename = "./test-10.xdf"
+filename = "./test-12.xdf"
 dejitter_timestamps = ["OpenSignals"]
 
 # --- Load Data ---
@@ -544,7 +550,7 @@ if len(streams_to_dejitter) > 0:
         streams[i] = streams2[i]
 
 
-# TEMPORARY HOTFIX FOR test-10.xdf
+# TEMPORARY HOTFIX FOR tests with gaps
 for i, s in enumerate(streams):
     name = s["info"].get("name", ["Unnamed"])[0]
     if "Muse_" in name:
@@ -559,6 +565,8 @@ for i, s in enumerate(streams):
                 streams[i]["time_stamps"][idx + 1 :] = (
                     ts[idx + 1 :] - diffs[idx] + np.median(diffs)
                 )
+streams.pop(1)
+
 
 # --- Pre-processing & Sanity Checks ---
 
@@ -690,14 +698,24 @@ df = synchronize_streams(
 
 
 # Find events
-df.iloc[200000:300000].plot(y=["LUX2", "CHANNEL_0"], figsize=(15, 5), subplots=True)
+df.iloc[200000:300000].plot(
+    y=["LUX2", "CHANNEL_0", "OPTICS_RI_RED"], figsize=(15, 5), subplots=True
+)
 lux_events = nk.events_find(
-    df["LUX2"], threshold_keep="below", duration_min=100, duration_max=5000
+    df["LUX2"], threshold_keep="below", duration_min=100, duration_max=8000
 )
 jspsych_events = nk.events_find(
-    df["CHANNEL_0"], threshold_keep="above", duration_min=100, duration_max=5000
+    df["CHANNEL_0"], threshold_keep="above", duration_min=100, duration_max=8000
 )
 heartbeats = nk.ecg_findpeaks(df["ECGBIT1"], sampling_rate=2000)["ECG_R_Peaks"]
+
+# Investigate events
+print(
+    f"len jspsych onsets: {len(jspsych_events['onset'])}, len lux onsets: {len(lux_events['onset'])}"
+)
+nk.find_closest()
+delays = jspsych_ts_onset - lux_ts_onset
+_ = plt.hist(delays, bins=50)
 
 # Preprocess
 df["EEG_AF8"] = df["EEG_AF8"] - df[["EEG_TP9", "EEG_TP10"]].mean(axis=1).values
@@ -717,20 +735,20 @@ df["EEG_AF"] = df[["EEG_AF7", "EEG_AF8"]].mean(axis=1).values
 # Create epochs
 epochs = nk.epochs_create(
     df,
-    events=heartbeats,
+    events=lux_events,
     sampling_rate=2000,
-    epochs_start=-0.6,
-    epochs_end=2,
+    epochs_start=-1,
+    epochs_end=3,
 )
 grand_av = nk.epochs_average(
     epochs,
-    which=["EEG_AF8", "ECGBIT1", "PULSEOXI3", "OPTICS_RI_RED"],
+    which=["EEG_AF8", "ECGBIT1", "PULSEOXI3", "OPTICS_LI_AMB"],
     indices=["mean", "std", "ci"],
     show=False,
 )
 grand_av.plot(
     x="Time",
-    y=["EEG_AF8_Mean", "ECGBIT1_Mean", "PULSEOXI3_Mean", "OPTICS_RI_RED_Mean"],
+    y=["EEG_AF8_Mean", "ECGBIT1_Mean", "PULSEOXI3_Mean", "OPTICS_LI_AMB_Mean"],
     figsize=(10, 5),
     subplots=True,
 )
