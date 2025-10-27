@@ -108,7 +108,7 @@ SENSORS = {
         "type": "BATTERY",
         "n_channels": 1,
         "n_samples": 1,
-        "rate": 0.1,
+        "rate": 1.0,
         "data_len": 20,
     },
 }
