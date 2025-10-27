@@ -3,102 +3,55 @@ Muse BLE to LSL Streaming
 ==========================
 
 This module streams decoded Muse sensor data over Lab Streaming Layer (LSL) in real-time.
-It handles BLE data reception, decoding, timestamp conversion, packet reordering, and
+It handles BLE data reception, decoding, packet reordering, and
 LSL transmission.
 
 Streaming Architecture:
 -----------------------
 1. BLE packets arrive asynchronously via Bleak callbacks (_on_data)
 2. Packets are decoded using parse_message() from decode.py
-3. Device timestamps are converted to LSL time
+3. Timestamps are generated in the device's own time domain (seconds since boot)
 4. Samples are buffered to allow packet reordering
-5. Buffer is periodically flushed: samples sorted by timestamp and pushed to LSL
-6. LSL outlets broadcast data to any connected LSL clients (e.g., LabRecorder)
+5. Buffer is periodically flushed: samples sorted by device timestamp and pushed to LSL
+6. LSL outlets broadcast data (with device timestamps) to any connected LSL clients
 
-Timestamp Handling - Stream-Relative Timing:
------------------------------------------------
-Timestamps are now generated relative to when streaming starts (base_time = 0.0),
-not when the Muse device was powered on. This eliminates the need for complex
-re-anchoring while maintaining precise device timing.
+Timestamp Handling - LSL Clock Drift Correction:
+------------------------------------------------
+This module uses LSL's built-in clock synchronization mechanism to ensure
+sub-millisecond, long-term accuracy and to correct for clock drift between
+the Muse device and the LSL host computer.
 
-The parse_message() function returns decoded data with THREE timestamp types:
+The old method (using a single, fixed offset) could not correct for clock
+drift. The new, more accurate pipeline is:
 
-1. **message_time** (datetime)
-   - When the BLE message was received on the computer
-   - Format: UTC datetime from get_utc_timestamp()
-   - Source: Computer system clock
-   - Used for: Debugging, logging
-   - NOT used for: LSL timestamps
+1.  **Device Time Generation:** `decode.py` generates timestamps in the
+    **device's time domain** (e.g., "seconds since device boot") by using
+    the first packet's timestamp as the `base_time`.
 
-2. **pkt_time** (float, seconds)
-   - When samples were captured on the Muse device
-   - Format: Seconds since device boot (from 256 kHz device clock)
-   - Source: Extracted from packet header (4-byte timestamp)
-   - Used for: Calculating relative timing between samples
-   - Device timing precision preserved through tick differences
+2.  **LSL Push:** `stream.py` pushes these *raw device timestamps*
+    directly to the LSL outlet, without any conversion.
 
-3. **timestamps** (array column in decoded data)
-   - Per-sample timestamps relative to stream start
-   - Format: Seconds, uniformly spaced at nominal sampling rate
-   - Source: 0.0 + (sample_index / sampling_rate) based on device timing
-   - Used for: Final LSL timestamps
-   - Naturally synchronized with other LSL streams
+3.  **LSL Pairing:** LSL automatically pairs these incoming device
+    timestamps with its own `local_clock()` time. These pairs are
+    saved in the XDF file.
 
-Simplified Timestamp Conversion Flow:
--------------------------------------
-    Device Time Domain          →       LSL Time Domain
-    ==================                  ===============
+4.  **Offline Correction:** When loading the XDF file, `pyxdf` (with
+    `synchronize_clocks=True`) performs a linear regression on all
+    these time-pairs. This builds a highly accurate model that
+    corrects for both the initial time offset AND any clock drift
+    that occurred during the recording.
 
-    Stream-relative timestamps          LSL timestamps
-    (base_time = 0.0)          →→→→→   (anchored to LSL time)
-
-    Where:
-    - Timestamps start from 0 when streaming begins
-    - Device timing precision preserved through 256kHz clock tick differences
-    - Natural LSL synchronization without artificial re-anchoring
-
-The conversion happens in two stages:
-
-1. _queue_samples(): LSL time mapping
-    - Extract stream-relative timestamps from decoded data
-    - Add device_to_lsl_offset (maps stream start to LSL time)
-    - Store in buffer with preserved device timing
-
-2. _flush_buffer(): Conditional re-anchoring (rare)
-    - Check if timestamps are already near current LSL time
-    - Only apply re-anchoring for edge cases (timestamps >30s in past)
-    - Preserves device timing precision while ensuring LSL compatibility
-The parse_message() function returns decoded data with THREE timestamp types:
-
-1. **message_time** (datetime)
-   - When the BLE message was received on the computer
-   - Format: UTC datetime from get_utc_timestamp()
-   - Source: Computer system clock
-   - Used for: Debugging, logging
-   - NOT used for: LSL timestamps
-
-2. **pkt_time** (float, seconds)
-   - When samples were captured on the Muse device
-   - Format: Seconds since device boot (from 256 kHz device clock)
-   - Source: Extracted from packet header (4-byte timestamp)
-   - Used for: Initial timestamp assignment in decode.py
-   - Converted to: LSL time via device_to_lsl_offset
-
-3. **timestamps** (array column in decoded data)
-   - Per-sample timestamps calculated by decode.py
-   - Format: Seconds, uniformly spaced at nominal sampling rate
-   - Source: pkt_time + (sample_index / sampling_rate)
-   - Used for: Final LSL timestamps (after conversion)
-   - These are the timestamps that appear in recorded XDF files
+This method preserves the device's perfect internal timing and provides
+the most accurate synchronization possible.
 
 Packet Reordering Buffer - Critical Design Component:
 ------------------------------------------------------
 **WHY BUFFERING IS NECESSARY:**
 
-BLE transmission can REORDER entire messages (not just individual packets). Analysis shows:
+BLE transmission can REORDER entire messages. Analysis shows:
 - ~5% of messages arrive out of order
 - Backward jumps can exceed 80ms in severe cases
-- Device's timestamps are CORRECT (device clock is monotonic and accurate)
+- Device's timestamps are CORRECT (device clock is monotonic)
 - But messages processed in arrival order → non-monotonic timestamps
 
 **EXAMPLE:**
@@ -113,7 +66,7 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 2. When buffer time limit reached, all buffered samples are:
    - Concatenated across packets/messages
    - **Sorted by device timestamp** (preserves device timing, corrects arrival order)
-   - **Timestamps already in LSL time domain** (no conversion needed)
+   - **Timestamps are in the device's time domain**
    - Pushed as a single chunk to LSL
 3. LSL receives samples in correct temporal order with device timing preserved
 
@@ -123,18 +76,15 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 - End of stream: Final flush when disconnecting
 
 **BUFFER SIZE RATIONALE:**
-- Original: 80ms (insufficient for ~90ms delays observed in data)
-- Previous: 250ms (captures nearly all out-of-order messages)
 - Current: 150ms (balances low latency with high temporal ordering accuracy)
 - Trade-off: Latency (150ms delay) vs. timestamp quality (near-perfect monotonic output)
-- For real-time applications: can reduce further, accept some non-monotonic timestamps
 - For recording quality: 150ms provides excellent temporal ordering
 
 Timestamp Quality & Device Timing Preservation:
 ------------------------------------------------
 **CRITICAL INSIGHT:**
 
-The decode.py output may show ~20% non-monotonic timestamps, but this is EXPECTED
+The `decode.py` output may show ~20% non-monotonic timestamps, but this is EXPECTED
 and NOT an error. These non-monotonic timestamps simply reflect BLE message arrival
 order, NOT device timing errors. The timestamp VALUES are correct and preserve the
 device's accurate 256 kHz clock timing.
@@ -144,19 +94,21 @@ device's accurate 256 kHz clock timing.
               ↓ (but timestamp values preserve device timing)
   stream.py:  Sorts by device timestamp → 0% non-monotonic ✓
               ↓ (restores correct temporal order)
-  LSL/XDF:    Monotonic timestamps with device timing preserved ✓
+  LSL/XDF:    Monotonic, drift-corrected timestamps (with pyxdf) ✓
 
 **DEVICE TIMING ACCURACY:**
 - Device uses 256 kHz internal clock (accurate, monotonic)
-- All subpackets within a message share same pkt_time (verified empirically)
-- decode.py uses base_time + sequential offsets (preserves device timing)
-- Intervals between samples match device's actual sampling rate (256 Hz, 52 Hz, etc.)
+- `decode.py` uses this clock to generate perfectly uniform sample intervals
+  at the device's actual sampling rate (256 Hz, 52 Hz, etc.)
 - This pipeline preserves device timing perfectly while handling BLE reordering
 
 **VERIFICATION:**
 
 When loading XDF files with pyxdf:
-- Use dejitter_timestamps=False for actual timestamp quality
+- Use **`synchronize_clocks=True`** for multi-device sync and **to correct for clock drift**.
+- Use `handle_clock_resets=True` (standard practice).
+- Use **`dejitter_timestamps=False`** to use the high-quality, uniform timestamps
+  generated from the device's 256kHz clock.
 
 LSL Stream Configuration:
 -------------------------
@@ -167,7 +119,7 @@ Three LSL streams are created:
 - Muse_BATTERY: 1 channel at 0.1 Hz (battery percentage)
 
 Each stream includes:
-- Channel labels (from decode.py: EEG_CHANNELS, ACCGYRO_CHANNELS, OPTICS_CHANNELS)
+- Channel labels (from decode.py)
 - Nominal sampling rate (declared device rate)
 - Data type (float32)
 - Units (microvolts for EEG, a.u. for others)
@@ -175,8 +127,7 @@ Each stream includes:
 
 Optional Raw Data Logging:
 ----------------------
-If the 'record' parameter is provided, all raw BLE packets are logged to a text file
-in the same format as the 'record' command:
+If the 'record' parameter is provided, all raw BLE packets are logged to a text file:
 - ISO8601 UTC timestamp
 - Characteristic UUID
 - Hex payload
