@@ -911,7 +911,7 @@ def view(
     Supported streams:
     - Muse_EEG: 4 EEG channels (TP9, AF7, AF8, TP10) at 256 Hz
     - Muse_ACCGYRO: 6 motion channels (ACC_X/Y/Z, GYRO_X/Y/Z) at 52 Hz
-    - Muse_Optics: Up to 16 optical channels at 64 Hz
+    - Muse_OPTICS: Up to 16 optical channels at 64 Hz
 
     Parameters:
     - stream_name: Name of specific LSL stream to connect to (default: None = show all available)
@@ -929,7 +929,7 @@ def view(
     streams = []
     if stream_name is None:
         # Try all possible Muse streams
-        for name in ["Muse_EEG", "Muse_ACCGYRO", "Muse_Optics"]:
+        for name in ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS"]:
             if verbose:
                 print(f"Looking for LSL stream '{name}'...")
             try:
