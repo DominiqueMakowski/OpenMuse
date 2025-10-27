@@ -219,7 +219,7 @@ BATTERY_LABELS: tuple[str, ...] = BATTERY_CHANNELS
 BUFFER_DURATION_SECONDS = 0.15
 
 # Maximum number of BLE packets to buffer
-MAX_BUFFER_PACKETS = 8
+MAX_BUFFER_PACKETS = 32
 
 
 @dataclass
