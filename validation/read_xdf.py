@@ -681,7 +681,7 @@ df = synchronize_streams(
         "LUX2",
         "ACC_X",
         "EEG_AF8",
-        "OPTICS_LO_NIR",
+        "OPTICS_RI_RED",
         "ECGBIT1",
         "PULSEOXI3",
     ],  # Pass the list of channels to plot
@@ -690,7 +690,7 @@ df = synchronize_streams(
 
 
 # Find events
-# df.iloc[200000:300000].plot(y=["LUX2", "CHANNEL_0"], figsize=(15, 5), subplots=True)
+df.iloc[200000:300000].plot(y=["LUX2", "CHANNEL_0"], figsize=(15, 5), subplots=True)
 lux_events = nk.events_find(
     df["LUX2"], threshold_keep="below", duration_min=100, duration_max=5000
 )
