@@ -190,6 +190,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Union
+import warnings
 
 import bleak
 import numpy as np
@@ -422,11 +423,18 @@ async def _stream_async(
 
         # Push to LSL
         try:
-            stream.outlet.push_chunk(
-                x=sorted_data.astype(np.float32, copy=False),  # type: ignore[arg-type]
-                timestamp=anchored_timestamps.astype(np.float64, copy=False),
-                pushThrough=True,
-            )
+            # Suppress the "A single sample is pushed" warning,
+            # which is expected for low-rate streams like BATTERY.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=".*A single sample is pushed.*",
+                )
+                stream.outlet.push_chunk(
+                    x=sorted_data.astype(np.float32, copy=False),  # type: ignore[arg-type]
+                    timestamp=anchored_timestamps.astype(np.float64, copy=False),
+                    pushThrough=True,
+                )
             samples_sent[sensor_type] += len(anchored_timestamps)
 
         except Exception as exc:
