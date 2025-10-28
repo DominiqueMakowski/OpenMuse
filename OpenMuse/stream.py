@@ -298,7 +298,7 @@ def _build_sensor_streams() -> dict[str, SensorStream]:
         name="Muse_BATTERY",
         stype="BATTERY",
         labels=BATTERY_LABELS,
-        sfreq=0.1,  # Nominal rate from decode.py SENSORS dict
+        sfreq=1.0,  # Nominal rate from decode.py SENSORS dict
         dtype="float32",
         source_id="Muse_BATTERY",
         unit="percent",
@@ -461,10 +461,7 @@ async def _stream_async(
         if device_to_lsl_offset is None:
             device_to_lsl_offset = lsl_now - device_times[0]
             if verbose:
-                print(
-                    f"Initialized global time offset: "
-                    f"{device_to_lsl_offset:.3f} seconds (from {sensor_type})"
-                )
+                print(f"Initialized global time offset: " f"{device_to_lsl_offset:.3f} seconds (from {sensor_type})")
 
         # Convert device timestamps to LSL time
         lsl_timestamps = device_times + device_to_lsl_offset
