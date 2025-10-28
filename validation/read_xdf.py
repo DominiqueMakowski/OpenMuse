@@ -1,17 +1,16 @@
 import io
+import time
 import urllib
 import warnings
 from fractions import Fraction
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pyxdf
 import scipy
-
 import scipy.interpolate
 import scipy.signal
-import time
-import matplotlib.pyplot as plt
 
 # ========================================================================================
 # Helper Functions for Resampling
@@ -68,10 +67,7 @@ def _create_timestamps(stream_data, target_fs):
     except ValueError:
         # Fallback: No streams have > 1 sample.
         # Revert to the original "ignorant" grid behavior.
-        warnings.warn(
-            "Could not find a reference stream with > 1 sample. "
-            "Reverting to un-anchored grid."
-        )
+        warnings.warn("Could not find a reference stream with > 1 sample. " "Reverting to un-anchored grid.")
         anchor_ts = global_min_ts
 
     # 3. Calculate the new start time based on the anchor
@@ -126,14 +122,10 @@ def _interpolate_streams(stream_data, new_timestamps, all_columns, col_to_idx, d
     """
     # This function is only intended for numeric data.
     if not np.issubdtype(dtype, np.floating):
-        raise ValueError(
-            "_interpolate_streams can only be used for numeric (float) dtypes."
-        )
+        raise ValueError("_interpolate_streams can only be used for numeric (float) dtypes.")
 
     # 1. Create the empty (NaN-filled) data grid
-    resampled_data = np.full(
-        (len(new_timestamps), len(all_columns)), np.nan, dtype=np.float64
-    )
+    resampled_data = np.full((len(new_timestamps), len(all_columns)), np.nan, dtype=np.float64)
 
     # 2. Iterate over each *original* stream and interpolate
     for s in stream_data:
@@ -145,9 +137,7 @@ def _interpolate_streams(stream_data, new_timestamps, all_columns, col_to_idx, d
         if len(original_ts) < 2:
             if len(original_ts) == 1:
                 # Fallback to "splat" (nearest) for single points
-                insertion_idx = np.searchsorted(
-                    new_timestamps, original_ts[0], side="left"
-                )
+                insertion_idx = np.searchsorted(new_timestamps, original_ts[0], side="left")
                 left_idx = np.clip(insertion_idx - 1, 0, len(new_timestamps) - 1)
                 right_idx = np.clip(insertion_idx, 0, len(new_timestamps) - 1)
                 is_left_closer = (original_ts[0] - new_timestamps[left_idx]) <= (
@@ -297,14 +287,10 @@ def _visual_control(original, resampled, window_start=None, window_length=2.0, a
 
     # Select the time window
     signal = original[(original.index >= window_start) & (original.index <= window_end)]
-    resampled = resampled[
-        (resampled.index >= window_start) & (resampled.index <= window_end)
-    ]
+    resampled = resampled[(resampled.index >= window_start) & (resampled.index <= window_end)]
 
     ax.plot(signal.index, signal, "o-", label="original", alpha=0.7, markersize=3)
-    ax.plot(
-        resampled.index, resampled, ".-", label="resampled", alpha=0.7, markersize=2
-    )
+    ax.plot(resampled.index, resampled, ".-", label="resampled", alpha=0.7, markersize=2)
     ax.legend()
     ax.set_title(f"Visual Control: {original.name}")
     ax.set_xlabel("Time (s)")
@@ -338,9 +324,7 @@ def _quality_control(stream, resampled_df, show=False):
 
         # 2. Find the corresponding resampled column
         if col_name not in resampled_df.columns:
-            warnings.warn(
-                f"Could not find column '{col_name}' in resampled data for QC."
-            )
+            warnings.warn(f"Could not find column '{col_name}' in resampled data for QC.")
             continue
 
         resampled_series = resampled_df[col_name]
@@ -396,9 +380,7 @@ def _quality_control(stream, resampled_df, show=False):
             original_series.index.name = "timestamps"
 
             # This will create its own figure by default
-            _visual_control(
-                original_series, resampled_series, window_start=None, window_length=2.0
-            )
+            _visual_control(original_series, resampled_series, window_start=None, window_length=2.0)
 
     return scores
 
@@ -428,9 +410,7 @@ def synchronize_streams(
 
     # --- Run Resampling ---
     start_time = time.time()
-    resampled_df = _resample_streams(
-        stream_data, target_fs=target_fs, fill_method=fill_method, fill_value=fill_value
-    )
+    resampled_df = _resample_streams(stream_data, target_fs=target_fs, fill_method=fill_method, fill_value=fill_value)
     duration = time.time() - start_time
 
     print(f"Resampling complete in {duration:.2f} seconds.")
@@ -476,13 +456,8 @@ def synchronize_streams(
 
         # Plot each requested channel on its subplot
         for ax, channel_name in zip(axes, show):
-            if (
-                channel_name not in original_data_map
-                or channel_name not in resampled_df.columns
-            ):
-                warnings.warn(
-                    f"Channel '{channel_name}' not found in data. Skipping plot."
-                )
+            if channel_name not in original_data_map or channel_name not in resampled_df.columns:
+                warnings.warn(f"Channel '{channel_name}' not found in data. Skipping plot.")
                 ax.set_title(f"Channel '{channel_name}' - NOT FOUND")
                 ax.grid(True)
                 continue
@@ -500,9 +475,7 @@ def synchronize_streams(
             resampled_series = resampled_df[channel_name]
 
             # Call the visual control helper, passing the specific axis
-            _visual_control(
-                original_series, resampled_series, ax=ax, window_start=window_start
-            )
+            _visual_control(original_series, resampled_series, ax=ax, window_start=window_start)
 
         # Tidy up the figure
         fig.tight_layout()
@@ -516,13 +489,11 @@ def synchronize_streams(
 # ========================================================================================
 
 # --- Check raw data ---
-import OpenMuse
-
-
+# import OpenMuse
 
 
 # --- Configuration ---
-filename = "./test-12.xdf"
+filename = "./test-13-dev.xdf"
 dejitter_timestamps = ["OpenSignals"]
 
 # --- Load Data ---
@@ -562,9 +533,7 @@ for i, s in enumerate(streams):
             jump_indices = np.where(diffs > 1000 * np.median(diffs))[0]
             # Replace with median
             for idx in jump_indices:
-                streams[i]["time_stamps"][idx + 1 :] = (
-                    ts[idx + 1 :] - diffs[idx] + np.median(diffs)
-                )
+                streams[i]["time_stamps"][idx + 1 :] = ts[idx + 1 :] - diffs[idx] + np.median(diffs)
 streams.pop(1)
 
 
@@ -588,9 +557,7 @@ ts_maxs = np.array([stream["time_stamps"].max() for stream in streams])
 ts_durations = ts_maxs - ts_mins
 duration_diffs = np.abs(ts_durations[:, np.newaxis] - ts_durations[np.newaxis, :])
 if np.any(duration_diffs > 7200):  # 2 hours
-    warnings.warn(
-        "Some streams differ in duration by more than 2 hours. This might be indicative of an issue."
-    )
+    warnings.warn("Some streams differ in duration by more than 2 hours. This might be indicative of an issue.")
 
 # --- Convert to common format (list of dicts) ---
 stream_data = []
@@ -601,9 +568,7 @@ for stream in streams:
         cols = [channels_info[i]["label"][0] for i in range(len(channels_info))]
     except (KeyError, TypeError, IndexError):
         cols = [f"CHANNEL_{i}" for i in range(np.array(stream["time_series"]).shape[1])]
-        warnings.warn(
-            f"Using default channel names for stream: {stream['info'].get('name', ['Unnamed'])[0]}"
-        )
+        warnings.warn(f"Using default channel names for stream: {stream['info'].get('name', ['Unnamed'])[0]}")
 
     name = stream["info"].get("name", ["Unnamed"])[0]
     timestamps = stream["time_stamps"] - min_ts  # Offset to zero
@@ -657,11 +622,7 @@ for stream in streams:
             "columns": cols,
             "name": name,
             "nominal_srate": float(stream["info"]["nominal_srate"][0]),
-            "effective_srate": (
-                len(timestamps) / (timestamps[-1] - timestamps[0])
-                if len(timestamps) > 1
-                else 0
-            ),
+            "effective_srate": (len(timestamps) / (timestamps[-1] - timestamps[0]) if len(timestamps) > 1 else 0),
         }
     )
 
@@ -670,9 +631,7 @@ all_cols = [col for s in stream_data for col in s["columns"]]
 duplicate_cols = set([col for col in all_cols if all_cols.count(col) > 1])
 
 if duplicate_cols:
-    warnings.warn(
-        f"Duplicate column names found: {duplicate_cols}. Prefixing with stream names."
-    )
+    warnings.warn(f"Duplicate column names found: {duplicate_cols}. Prefixing with stream names.")
     for s in stream_data:
         # Check if any of this stream's columns are duplicates
         if any(col in duplicate_cols for col in s["columns"]):
@@ -698,21 +657,13 @@ df = synchronize_streams(
 
 
 # Find events
-df.iloc[200000:300000].plot(
-    y=["LUX2", "CHANNEL_0", "OPTICS_RI_RED"], figsize=(15, 5), subplots=True
-)
-lux_events = nk.events_find(
-    df["LUX2"], threshold_keep="below", duration_min=100, duration_max=8000
-)
-jspsych_events = nk.events_find(
-    df["CHANNEL_0"], threshold_keep="above", duration_min=100, duration_max=8000
-)
+df.iloc[200000:300000].plot(y=["LUX2", "CHANNEL_0", "OPTICS_RI_RED"], figsize=(15, 5), subplots=True)
+lux_events = nk.events_find(df["LUX2"], threshold_keep="below", duration_min=100, duration_max=8000)
+jspsych_events = nk.events_find(df["CHANNEL_0"], threshold_keep="above", duration_min=100, duration_max=8000)
 heartbeats = nk.ecg_findpeaks(df["ECGBIT1"], sampling_rate=2000)["ECG_R_Peaks"]
 
 # Investigate events
-print(
-    f"len jspsych onsets: {len(jspsych_events['onset'])}, len lux onsets: {len(lux_events['onset'])}"
-)
+print(f"len jspsych onsets: {len(jspsych_events['onset'])}, len lux onsets: {len(lux_events['onset'])}")
 nk.find_closest()
 delays = jspsych_ts_onset - lux_ts_onset
 _ = plt.hist(delays, bins=50)
@@ -720,15 +671,9 @@ _ = plt.hist(delays, bins=50)
 # Preprocess
 df["EEG_AF8"] = df["EEG_AF8"] - df[["EEG_TP9", "EEG_TP10"]].mean(axis=1).values
 df["EEG_AF7"] = df["EEG_AF7"] - df[["EEG_TP9", "EEG_TP10"]].mean(axis=1).values
-df["EEG_AF8"] = nk.signal_filter(
-    df["EEG_AF8"], sampling_rate=2000, lowcut=1.0, highcut=40.0
-)
-df["EEG_AF7"] = nk.signal_filter(
-    df["EEG_AF7"], sampling_rate=2000, lowcut=1.0, highcut=40.0
-)
-df["OPTICS_RI_RED"] = nk.signal_filter(
-    df["OPTICS_RI_RED"], sampling_rate=2000, lowcut=0.2, highcut=40.0
-)
+df["EEG_AF8"] = nk.signal_filter(df["EEG_AF8"], sampling_rate=2000, lowcut=1.0, highcut=40.0)
+df["EEG_AF7"] = nk.signal_filter(df["EEG_AF7"], sampling_rate=2000, lowcut=1.0, highcut=40.0)
+df["OPTICS_RI_RED"] = nk.signal_filter(df["OPTICS_RI_RED"], sampling_rate=2000, lowcut=0.2, highcut=40.0)
 
 df["EEG_AF"] = df[["EEG_AF7", "EEG_AF8"]].mean(axis=1).values
 
