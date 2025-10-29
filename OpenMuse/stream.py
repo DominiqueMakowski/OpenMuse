@@ -148,7 +148,14 @@ import numpy as np
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
 from .backends import _run
-from .decode import ACCGYRO_CHANNELS, BATTERY_CHANNELS, EEG_CHANNELS, OPTICS_CHANNELS, make_timestamps, parse_message
+from .decode import (
+    ACCGYRO_CHANNELS,
+    BATTERY_CHANNELS,
+    EEG_CHANNELS,
+    OPTICS_CHANNELS,
+    make_timestamps,
+    parse_message,
+)
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
@@ -249,7 +256,7 @@ def _build_sensor_streams() -> dict[str, SensorStream]:
         name="Muse_BATTERY",
         stype="BATTERY",
         labels=BATTERY_LABELS,
-        sfreq=0.1,  # Nominal rate from decode.py SENSORS dict
+        sfreq=1.0,  # Nominal rate from decode.py SENSORS dict
         dtype="float32",
         source_id="Muse_BATTERY",
         unit="percent",
@@ -377,7 +384,9 @@ async def _stream_async(
         stream.buffer.clear()
         stream.last_push_time = local_clock()
 
-    def _queue_samples(sensor_type: str, data_array: np.ndarray, lsl_now: float) -> None:
+    def _queue_samples(
+        sensor_type: str, data_array: np.ndarray, lsl_now: float
+    ) -> None:
         nonlocal device_to_lsl_offset  # Access global offset
 
         if data_array.size == 0 or data_array.shape[1] < 2:
@@ -391,7 +400,9 @@ async def _stream_async(
             target = stream.pad_to_channels
             current = samples.shape[1]
             if current < target:
-                padding = np.zeros((samples.shape[0], target - current), dtype=np.float32)
+                padding = np.zeros(
+                    (samples.shape[0], target - current), dtype=np.float32
+                )
                 samples = np.hstack([samples, padding])
             elif current > target:
                 samples = samples[:, :target]
@@ -411,7 +422,9 @@ async def _stream_async(
             _flush_buffer(sensor_type)
         elif len(stream.buffer) >= MAX_BUFFER_PACKETS:
             if verbose:
-                print(f"Warning: {sensor_type} buffer reached {MAX_BUFFER_PACKETS} packets, forcing flush")
+                print(
+                    f"Warning: {sensor_type} buffer reached {MAX_BUFFER_PACKETS} packets, forcing flush"
+                )
             _flush_buffer(sensor_type)
 
     def _on_data(_, data: bytearray):
@@ -447,7 +460,9 @@ async def _stream_async(
                 )
 
                 # 2. Call make_timestamps
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = make_timestamps(pkt_list, *current_state)
+                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
+                    make_timestamps(pkt_list, *current_state)
+                )
                 decoded[sensor_type] = array
 
                 # 3. Update state
@@ -510,7 +525,9 @@ async def _stream_async(
         for sensor_type, stream in sensor_streams.items():
             if len(stream.buffer) > 0:
                 if verbose:
-                    print(f"Flushing {len(stream.buffer)} buffered {sensor_type} packets...")
+                    print(
+                        f"Flushing {len(stream.buffer)} buffered {sensor_type} packets..."
+                    )
                 _flush_buffer(sensor_type)
 
         # --- Close raw recording file ---
@@ -527,7 +544,11 @@ async def _stream_async(
 
         if verbose:
             print(
-                "Stream stopped. " + ", ".join(f"{sensor}: {count} samples" for sensor, count in samples_sent.items())
+                "Stream stopped. "
+                + ", ".join(
+                    f"{sensor}: {count} samples"
+                    for sensor, count in samples_sent.items()
+                )
             )
 
 
