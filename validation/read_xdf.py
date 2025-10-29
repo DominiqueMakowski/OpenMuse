@@ -664,7 +664,7 @@ heartbeats = nk.ecg_findpeaks(df["ECGBIT1"], sampling_rate=2000)["ECG_R_Peaks"]
 
 # Investigate events
 print(f"len jspsych onsets: {len(jspsych_events['onset'])}, len lux onsets: {len(lux_events['onset'])}")
-nk.find_closest()
+
 delays = jspsych_ts_onset - lux_ts_onset
 _ = plt.hist(delays, bins=50)
 

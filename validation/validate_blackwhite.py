@@ -4,8 +4,8 @@ import pandas as pd
 import pyxdf
 
 # --- Configuration ---
-filename = "./test-14-dev.xdf"
-filename = "./test-14-clock.xdf"
+filename = "./test-15-dev.xdf"
+filename = "./test-15-clock.xdf"
 dejitter_timestamps = ["OpenSignals"]
 
 # --- Load Data ---
@@ -60,10 +60,12 @@ for i, s in enumerate(streams):
     channels = [d["label"][0] for d in s["info"]["desc"][0]["channels"][0]["channel"]]
     if name in ["OpenSignals"]:
         lux = s["time_series"][:, channels.index("LUX2")]
+        lux = (lux - np.min(lux)) / (np.max(lux) - np.min(lux))
         lux_ts = s["time_stamps"]
         plt.plot(lux_ts, lux, color="blue")
     if name in ["Muse_OPTICS"]:
         optics = s["time_series"][:, channels.index("OPTICS_RI_AMB")]
+        optics = (optics - np.min(optics)) / (np.max(optics) - np.min(optics))
         optics_ts = s["time_stamps"]
         plt.plot(optics_ts, optics, color="red")
     # ax = fig.add_subplot(len(streams), 1, i + 1)
@@ -78,5 +80,8 @@ events_lux = nk.events_find(lux, threshold_keep="below")
 events_optics = nk.events_find(optics, threshold_keep="below")
 onsets_lux = lux_ts[events_lux["onset"]]
 onsets_optics = optics_ts[events_optics["onset"]]
+onsets_optics = nk.find_closest(onsets_lux, onsets_optics)
+diff = onsets_lux - onsets_optics
 
-_ = plt.hist(onsets_lux - onsets_optics, alpha=0.5, bins=50)
+_ = plt.hist(diff, alpha=0.5)
+plt.plot(onsets_lux, diff)
