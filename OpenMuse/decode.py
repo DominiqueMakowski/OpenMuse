@@ -70,21 +70,21 @@ SENSORS = {
         "data_len": 28,
     },
     0x34: {
-        "type": "Optics",
+        "type": "OPTICS",
         "n_channels": 4,
         "n_samples": 3,
         "rate": 64.0,
         "data_len": 30,
     },
     0x35: {
-        "type": "Optics",
+        "type": "OPTICS",
         "n_channels": 8,
         "n_samples": 2,
         "rate": 64.0,
         "data_len": 40,
     },
     0x36: {
-        "type": "Optics",
+        "type": "OPTICS",
         "n_channels": 16,
         "n_samples": 1,
         "rate": 64.0,
@@ -105,10 +105,10 @@ SENSORS = {
         "data_len": 24,
     },
     0x98: {
-        "type": "Battery",
+        "type": "BATTERY",
         "n_channels": 1,
         "n_samples": 1,
-        "rate": 0.1,
+        "rate": 1.0,
         "data_len": 20,
     },
 }
@@ -159,6 +159,8 @@ OPTICS_CHANNELS = (
     "OPTICS_RI_AMB",
 )
 
+BATTERY_CHANNELS = ("BATTERY_PERCENT",)
+
 
 def _select_eeg_channels(count: int) -> List[str]:
     if count <= len(EEG_CHANNELS):
@@ -195,7 +197,7 @@ def parse_message(message: str) -> Dict[str, List[Dict]]:
     Returns:
     --------
     dict : Dictionary with sensor types as keys, lists of subpacket dicts as values
-        Keys: "EEG", "ACCGYRO", "Optics", "Battery", "Unknown"
+        Keys: "EEG", "ACCGYRO", "OPTICS", "BATTERY", "Unknown"
         Each list contains subpacket dictionaries with decoded sensor data
     """
 
@@ -246,8 +248,8 @@ def _empty_result() -> Dict[str, List]:
     return {
         "EEG": [],
         "ACCGYRO": [],
-        "Optics": [],
-        "Battery": [],
+        "OPTICS": [],
+        "BATTERY": [],
         "Unknown": [],
     }
 
@@ -257,8 +259,8 @@ def _empty_result_arrays() -> Dict[str, np.ndarray]:
     return {
         "EEG": np.empty((0, 0)),
         "ACCGYRO": np.empty((0, 0)),
-        "Optics": np.empty((0, 0)),
-        "Battery": np.empty((0, 0)),
+        "OPTICS": np.empty((0, 0)),
+        "BATTERY": np.empty((0, 0)),
         "Unknown": np.empty((0, 0)),
     }
 
@@ -461,11 +463,11 @@ def _decode_subpacket_data(subpkt: Dict) -> Optional[Dict]:
     # Decode based on sensor type
     if sensor_type == "ACCGYRO":
         data = _decode_accgyro_data(data_bytes)
-    elif sensor_type == "Battery":
+    elif sensor_type == "BATTERY":
         data = _decode_battery_data(data_bytes)
     elif sensor_type == "EEG":
         data = _decode_eeg_data(data_bytes, n_channels)
-    elif sensor_type == "Optics":
+    elif sensor_type == "OPTICS":
         data = _decode_optics_data(data_bytes, n_channels)
     else:
         return None
@@ -879,7 +881,7 @@ def decode_rawdata(messages: List[str]) -> Dict[str, pd.DataFrame]:
     Returns:
     --------
     Dict[str, pd.DataFrame] : Dictionary mapping sensor type to DataFrame
-        Keys: "EEG", "ACCGYRO", "Optics", "Battery", "Unknown"
+        Keys: "EEG", "ACCGYRO", "OPTICS", "BATTERY", "Unknown"
         Each DataFrame has columns: [time, channel_1, channel_2, ...]
 
     Example:
@@ -892,14 +894,14 @@ def decode_rawdata(messages: List[str]) -> Dict[str, pd.DataFrame]:
     ['time', 'EEG_TP9', 'EEG_AF7', 'EEG_AF8', 'EEG_TP10']
     >>> print(data["ACCGYRO"].columns)
     ['time', 'ACC_X', 'ACC_Y', 'ACC_Z', 'GYRO_X', 'GYRO_Y', 'GYRO_Z']
-    >>> print(data["Optics"].columns)  # For Optics4
+    >>> print(data["OPTICS"].columns)  # For Optics4
     ['time', 'OPTICS_LI_NIR', 'OPTICS_RI_NIR', 'OPTICS_LI_IR', 'OPTICS_RI_IR']
     """
     import pandas as pd
 
     # Collect all subpackets from all messages
     all_subpackets = {
-        key: [] for key in ["EEG", "ACCGYRO", "Optics", "Battery", "Unknown"]
+        key: [] for key in ["EEG", "ACCGYRO", "OPTICS", "BATTERY", "Unknown"]
     }
 
     for message in messages:
@@ -930,10 +932,10 @@ def decode_rawdata(messages: List[str]) -> Dict[str, pd.DataFrame]:
             columns = ["time", *_select_eeg_channels(n_channels)]
         elif sensor_type == "ACCGYRO":
             columns = ["time", *ACCGYRO_CHANNELS]
-        elif sensor_type == "Optics":
+        elif sensor_type == "OPTICS":
             n_channels = n_cols - 1
             columns = ["time", *_select_optics_channels(n_channels)]
-        elif sensor_type == "Battery":
+        elif sensor_type == "BATTERY":
             columns = ["time", "battery_percent"]
         else:
             # Generic column names
