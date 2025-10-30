@@ -219,10 +219,10 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
     # --- EEG Stream ---
     info_eeg = StreamInfo(
         name=f"Muse_EEG",
-        type="EEG",
-        channel_count=len(EEG_CHANNELS),
-        nominal_srate=256.0,
-        channel_format="float32",
+        stype="EEG",
+        n_channels=len(EEG_CHANNELS),
+        sfreq=256.0,
+        dtype="float32",
         source_id=f"{device_id}_eeg",
     )
     info_eeg.desc().append_child_value("manufacturer", "Muse")
@@ -236,10 +236,10 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
     # --- ACCGYRO Stream ---
     info_accgyro = StreamInfo(
         name=f"Muse_ACCGYRO",
-        type="ACC_GYRO",
-        channel_count=len(ACCGYRO_CHANNELS),
-        nominal_srate=52.0,
-        channel_format="float32",
+        stype="ACC_GYRO",
+        n_channels=len(ACCGYRO_CHANNELS),
+        sfreq=52.0,
+        dtype="float32",
         source_id=f"{device_id}_accgyro",
     )
     info_accgyro.desc().append_child_value("manufacturer", "Muse")
@@ -253,10 +253,10 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
     # --- OPTICS Stream ---
     info_optics = StreamInfo(
         name=f"Muse_OPTICS",
-        type="PPG",
-        channel_count=len(OPTICS_CHANNELS),
-        nominal_srate=64.0,
-        channel_format="float32",
+        stype="PPG",
+        n_channels=len(OPTICS_CHANNELS),
+        sfreq=64.0,
+        dtype="float32",
         source_id=f"{device_id}_optics",
     )
     info_optics.desc().append_child_value("manufacturer", "Muse")
@@ -270,10 +270,10 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
     # --- Battery Stream ---
     info_battery = StreamInfo(
         name=f"Muse_BATTERY",
-        type="Battery",
-        channel_count=len(BATTERY_CHANNELS),
-        nominal_srate=1.0 / 60.0,  # ~1 per minute
-        channel_format="float32",
+        stype="Battery",
+        n_channels=len(BATTERY_CHANNELS),
+        sfreq=1.0 / 60.0,  # ~1 per minute
+        dtype="float32",
         source_id=f"{device_id}_battery",
     )
     info_battery.desc().append_child_value("manufacturer", "Muse")
