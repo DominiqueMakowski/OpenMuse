@@ -193,7 +193,14 @@ import bleak
 import numpy as np
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
-from decode import ACCGYRO_CHANNELS, BATTERY_CHANNELS, EEG_CHANNELS, OPTICS_CHANNELS, make_timestamps, parse_message
+from decode import (
+    ACCGYRO_CHANNELS,
+    BATTERY_CHANNELS,
+    EEG_CHANNELS,
+    OPTICS_CHANNELS,
+    make_timestamps,
+    parse_message,
+)
 from muse import MuseS
 from utils import configure_lsl_api_cfg, get_utc_timestamp
 
@@ -366,7 +373,9 @@ async def _stream_async(
                 if not (0.9 < drift_b < 1.1):
                     # Something is wrong, reset to offset-only
                     if verbose:
-                        print(f"Warning: Unstable drift fit (b={drift_b:.4f}). Resetting.")
+                        print(
+                            f"Warning: Unstable drift fit (b={drift_b:.4f}). Resetting."
+                        )
                     drift_a = None  # This will trigger re-calibration below
                     drift_b = 1.0
                     drift_pairs = []  # Clear bad data
@@ -388,7 +397,7 @@ async def _stream_async(
 
     def _flush_buffer():
         """Sort and push all buffered samples to LSL."""
-        nonlocal last_flush_time, samples_sent
+        nonlocal last_flush_time, samples_sent  # noqa: F824
         last_flush_time = time.monotonic()
 
         for sensor_type, stream in streams.items():
@@ -454,7 +463,9 @@ async def _stream_async(
                 )
 
                 # 2. Call make_timestamps (This creates the t=0 relative device_time)
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = make_timestamps(pkt_list, *current_state)
+                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
+                    make_timestamps(pkt_list, *current_state)
+                )
                 decoded[sensor_type] = array
 
                 # 3. Update state
@@ -490,11 +501,16 @@ async def _stream_async(
         if verbose:
             print("LSL outlets created:")
             for s in streams.values():
-                print(f"  - {s.outlet.get_info().name()} " f"({s.outlet.get_info().channel_count()} channels)")
+                print(
+                    f"  - {s.outlet.get_info().name()} "
+                    f"({s.outlet.get_info().channel_count()} channels)"
+                )
 
         # Subscribe to data and configure device
         data_callbacks = {MuseS.EEG_UUID: _on_data}
-        await MuseS.connect_and_initialize(client, preset, data_callbacks, verbose=verbose)
+        await MuseS.connect_and_initialize(
+            client, preset, data_callbacks, verbose=verbose
+        )
 
         if verbose:
             print("Streaming data... (Press Ctrl+C to stop)")
@@ -518,7 +534,11 @@ async def _stream_async(
         _flush_buffer()  # Final flush
         if verbose:
             print(
-                "Stream stopped. " + ", ".join(f"{sensor}: {count} samples" for sensor, count in samples_sent.items())
+                "Stream stopped. "
+                + ", ".join(
+                    f"{sensor}: {count} samples"
+                    for sensor, count in samples_sent.items()
+                )
             )
 
 
@@ -581,7 +601,9 @@ def stream(
             print("Streaming stopped by user.")
     except bleak.BleakError as e:
         print(f"BLEAK Error: {e}")
-        print("This may be a connection issue. Ensure the device is charged and nearby.")
+        print(
+            "This may be a connection issue. Ensure the device is charged and nearby."
+        )
         print("If on Linux, you may need to run with 'sudo' or set permissions.")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
