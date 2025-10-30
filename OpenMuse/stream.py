@@ -193,7 +193,7 @@ import bleak
 import numpy as np
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
-from decode import (
+from .decode import (
     ACCGYRO_CHANNELS,
     BATTERY_CHANNELS,
     EEG_CHANNELS,
@@ -201,7 +201,7 @@ from decode import (
     make_timestamps,
     parse_message,
 )
-from muse import MuseS
+from .muse import MuseS
 from utils import configure_lsl_api_cfg, get_utc_timestamp
 
 
