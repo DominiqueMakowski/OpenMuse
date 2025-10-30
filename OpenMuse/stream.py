@@ -225,10 +225,11 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
         dtype="float32",
         source_id=f"{device_id}_eeg",
     )
-    info_eeg.desc().append_child_value("manufacturer", "Muse")
-    info_eeg.desc().append_child_value("model", "MuseS")
-    info_eeg.desc().append_child_value("device", device_name)
-    channels = info_eeg.desc().append_child("channels")
+    desc_eeg = info_eeg.desc  # <-- Access as attribute (no parentheses)
+    desc_eeg.append_child_value("manufacturer", "Muse")
+    desc_eeg.append_child_value("model", "MuseS")
+    desc_eeg.append_child_value("device", device_name)
+    channels = desc_eeg.append_child("channels")
     for ch_name in EEG_CHANNELS:
         channels.append_child("channel").append_child_value("label", ch_name)
     streams["EEG"] = SensorStream(outlet=StreamOutlet(info_eeg))
@@ -242,10 +243,11 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
         dtype="float32",
         source_id=f"{device_id}_accgyro",
     )
-    info_accgyro.desc().append_child_value("manufacturer", "Muse")
-    info_accgyro.desc().append_child_value("model", "MuseS")
-    info_accgyro.desc().append_child_value("device", device_name)
-    channels_acc = info_accgyro.desc().append_child("channels")
+    desc_acc = info_accgyro.desc
+    desc_acc.append_child_value("manufacturer", "Muse")
+    desc_acc.append_child_value("model", "MuseS")
+    desc_acc.append_child_value("device", device_name)
+    channels_acc = desc_acc.append_child("channels")
     for ch_name in ACCGYRO_CHANNELS:
         channels_acc.append_child("channel").append_child_value("label", ch_name)
     streams["ACCGYRO"] = SensorStream(outlet=StreamOutlet(info_accgyro))
@@ -259,10 +261,11 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
         dtype="float32",
         source_id=f"{device_id}_optics",
     )
-    info_optics.desc().append_child_value("manufacturer", "Muse")
-    info_optics.desc().append_child_value("model", "MuseS")
-    info_optics.desc().append_child_value("device", device_name)
-    channels_opt = info_optics.desc().append_child("channels")
+    desc_opt = info_optics.desc
+    desc_opt.append_child_value("manufacturer", "Muse")
+    desc_opt.append_child_value("model", "MuseS")
+    desc_opt.append_child_value("device", device_name)
+    channels_opt = desc_opt.append_child("channels")
     for ch_name in OPTICS_CHANNELS:
         channels_opt.append_child("channel").append_child_value("label", ch_name)
     streams["OPTICS"] = SensorStream(outlet=StreamOutlet(info_optics))
@@ -276,10 +279,11 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
         dtype="float32",
         source_id=f"{device_id}_battery",
     )
-    info_battery.desc().append_child_value("manufacturer", "Muse")
-    info_battery.desc().append_child_value("model", "MuseS")
-    info_battery.desc().append_child_value("device", device_name)
-    channels_batt = info_battery.desc().append_child("channels")
+    desc_batt = info_battery.desc
+    desc_batt.append_child_value("manufacturer", "Muse")
+    desc_batt.append_child_value("model", "MuseS")
+    desc_batt.append_child_value("device", device_name)
+    channels_batt = desc_batt.append_child("channels")
     for ch_name in BATTERY_CHANNELS:
         channels_batt.append_child("channel").append_child_value("label", ch_name)
     streams["BATTERY"] = SensorStream(outlet=StreamOutlet(info_battery))
