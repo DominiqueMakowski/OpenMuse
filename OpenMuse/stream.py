@@ -496,13 +496,6 @@ async def _stream_async(
 
         # Create LSL outlets
         streams = _create_lsl_outlets(client.name, address)
-        if verbose:
-            print("LSL outlets created:")
-            for s in streams.values():
-                print(
-                    f"  - {s.outlet.get_info().name()} "
-                    f"({s.outlet.get_info().channel_count()} channels)"
-                )
 
         # Subscribe to data and configure device
         data_callbacks = {MuseS.EEG_UUID: _on_data}
