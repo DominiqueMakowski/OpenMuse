@@ -202,7 +202,7 @@ from .decode import (
     parse_message,
 )
 from .muse import MuseS
-from utils import configure_lsl_api_cfg, get_utc_timestamp
+from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
 
 @dataclass
