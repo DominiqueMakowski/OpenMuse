@@ -398,6 +398,9 @@ async def _stream_async(
         nonlocal last_flush_time, samples_sent  # noqa: F824
         last_flush_time = time.monotonic()
 
+        # Get LSL time once for this flush operation
+        lsl_now = local_clock()
+
         for sensor_type, stream in streams.items():
             if not stream.buffer:
                 continue
@@ -417,17 +420,33 @@ async def _stream_async(
             sorted_timestamps = all_timestamps[sort_indices]
             sorted_data = all_samples[sort_indices, :]
 
-            # Get the LSL timestamps for push_chunk
-            # We must use the 'timestamp' argument here
-            anchored_timestamps = sorted_timestamps.astype(np.float64, copy=False)
+            # This prevents pushing timestamps of [0.0]
+            first_timestamp = sorted_timestamps[0]
+
+            if first_timestamp >= lsl_now - 30.0:
+                anchored_timestamps = sorted_timestamps
+            else:
+                # Re-anchor to be relative to lsl_now
+                time_span = sorted_timestamps[-1] - first_timestamp
+                # Use the new script's FLUSH_INTERVAL as a stand-in for the old BUFFER_DURATION
+                expected_age = time_span + (FLUSH_INTERVAL / 2.0)
+                anchor_time = lsl_now - expected_age
+                timestamp_shift = anchor_time - first_timestamp
+                anchored_timestamps = sorted_timestamps + timestamp_shift
 
             # Push the chunk to LSL
             try:
-                stream.outlet.push_chunk(
-                    x=sorted_data.astype(np.float32, copy=False),
-                    timestamp=anchored_timestamps,
-                    pushThrough=True,
-                )
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=".*A single sample is pushed.*",
+                    )
+                    stream.outlet.push_chunk(
+                        x=sorted_data.astype(np.float32, copy=False),
+                        timestamp=anchored_timestamps.astype(np.float64, copy=False),
+                        pushThrough=True,
+                    )
+
                 samples_sent[sensor_type] += len(sorted_data)
             except Exception as e:
                 if verbose:
