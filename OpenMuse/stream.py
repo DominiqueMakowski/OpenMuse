@@ -193,14 +193,8 @@ import bleak
 import numpy as np
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
-from .decode import (
-    ACCGYRO_CHANNELS,
-    BATTERY_CHANNELS,
-    EEG_CHANNELS,
-    OPTICS_CHANNELS,
-    make_timestamps,
-    parse_message,
-)
+from .decode import (ACCGYRO_CHANNELS, BATTERY_CHANNELS, EEG_CHANNELS,
+                     OPTICS_CHANNELS, make_timestamps, parse_message)
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
@@ -494,10 +488,10 @@ async def _stream_async(
 
     async with bleak.BleakClient(address, timeout=15.0) as client:
         if verbose:
-            print(f"Connected. Device: {client.device.name}")
+            print(f"Connected. Device: {client.name}")
 
         # Create LSL outlets
-        streams = _create_lsl_outlets(client.device.name, address)
+        streams = _create_lsl_outlets(client.name, address)
         if verbose:
             print("LSL outlets created:")
             for s in streams.values():
