@@ -275,7 +275,7 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
         name=f"Muse_BATTERY",
         stype="Battery",
         n_channels=len(BATTERY_CHANNELS),
-        sfreq=1.0 / 60.0,  # ~1 per minute
+        sfreq=1.0,  
         dtype="float32",
         source_id=f"{device_id}_battery",
     )
