@@ -340,7 +340,7 @@ async def _stream_async(
         lsl_now : float
             The computer's LSL clock time when the BLE message was received.
         """
-        nonlocal drift_filter, drift_initialized
+        nonlocal drift_filter, drift_initialized  # noqa: F824
 
         if data_array.size == 0 or data_array.shape[1] < 2:
             return  # No data in this packet
