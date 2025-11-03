@@ -153,19 +153,6 @@ from .utils import configure_lsl_api_cfg, get_utc_timestamp
 MAX_BUFFER_PACKETS = 52  # 52 packets per sensor
 
 
-@dataclass
-class SensorStream:
-    """Holds the LSL outlet and a buffer for a single sensor stream."""
-
-    outlet: StreamOutlet
-    buffer: List[Tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
-    # Track state for make_timestamps (wraparound, sample counter, etc.)
-    base_time: Optional[float] = None
-    wrap_offset: int = 0
-    last_abs_tick: int = 0
-    sample_counter: int = 0
-
-
 class _RLSFilter:
     """
     Implements a Recursive Least Squares (RLS) filter for online clock drift.
@@ -224,6 +211,25 @@ class _RLSFilter:
 
         # 4. Update covariance matrix (P)
         self.P = (self.P - (k @ x.T @ self.P)) / self.lam
+
+
+@dataclass
+class SensorStream:
+    """Holds the LSL outlet and a buffer for a single sensor stream."""
+
+    outlet: StreamOutlet
+    buffer: List[Tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
+    # Track state for make_timestamps (wraparound, sample counter, etc.)
+    base_time: Optional[float] = None
+    wrap_offset: int = 0
+    last_abs_tick: int = 0
+    sample_counter: int = 0
+    # --- ADDED: Per-stream state for online drift correction ---
+    drift_filter: _RLSFilter = field(
+        default_factory=lambda: _RLSFilter(dim=2, lam=0.9999, P_init=1e6)
+    )
+    drift_initialized: bool = False
+    last_update_device_time: float = 0.0
 
 
 def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStream]:
@@ -314,12 +320,6 @@ async def _stream_async(
 ):
     """Asynchronous context for BLE connection and LSL streaming."""
 
-    # --- State for Online Drift Correction ---
-    # Model: lsl_time = (b * device_time) + a
-    # theta = [b, a]
-    drift_filter = _RLSFilter(dim=2, lam=0.9999, P_init=1e6)
-    drift_initialized = False
-
     # --- Other Stream State ---
     streams: Dict[str, SensorStream] = {}
     last_flush_time = 0.0
@@ -328,7 +328,7 @@ async def _stream_async(
 
     def _queue_samples(sensor_type: str, data_array: np.ndarray, lsl_now: float):
         """
-        Apply drift correction and buffer samples.
+        Apply drift correction and buffer samples using a per-stream filter.
 
         Parameters
         ----------
@@ -340,14 +340,17 @@ async def _stream_async(
         lsl_now : float
             The computer's LSL clock time when the BLE message was received.
         """
-        nonlocal drift_filter, drift_initialized  # noqa: F824
-
         if data_array.size == 0 or data_array.shape[1] < 2:
             return  # No data in this packet
 
         stream = streams.get(sensor_type)
         if stream is None:
             return  # No LSL outlet for this type
+
+        # --- Get PER-STREAM filter state ---
+        drift_filter = stream.drift_filter
+        drift_initialized = stream.drift_initialized
+        last_update_device_time = stream.last_update_device_time
 
         # Extract device timestamps (relative to t=0 from make_timestamps)
         device_times = data_array[:, 0]
@@ -357,15 +360,20 @@ async def _stream_async(
         first_device_time = device_times[0]
 
         if not drift_initialized:
-            # Initialize the filter's intercept (a) with the first packet
-            # Model: lsl_now = (1.0 * dev_time) + a
+            # Initialize this sensor's filter
             initial_a = lsl_now - first_device_time
             drift_filter.theta = np.array([1.0, initial_a])
-            drift_initialized = True
+            stream.drift_initialized = True  # Set state on the stream object
+            stream.last_update_device_time = first_device_time
         else:
-            # Update the filter with the new (device_time, lsl_now) pair
-            # y = lsl_now, x = [dev_time, 1.0]
-            drift_filter.update(y=lsl_now, x=np.array([first_device_time, 1.0]))
+            # Only update filter if this packet is 'newer'
+            # This prevents out-of-order packets from corrupting the model
+            if first_device_time > last_update_device_time:
+                # Update the filter with the new (device_time, lsl_now) pair
+                # y = lsl_now, x = [dev_time, 1.0]
+                drift_filter.update(y=lsl_now, x=np.array([first_device_time, 1.0]))
+                stream.last_update_device_time = first_device_time
+            # (Else: This is an out-of-order packet, ignore it for filter updates)
 
         # Get current model parameters [b, a]
         drift_b, drift_a = drift_filter.theta
@@ -374,11 +382,11 @@ async def _stream_async(
         if not (0.9 < drift_b < 1.1):
             if verbose:
                 print(
-                    f"Warning: Unstable drift fit (b={drift_b:.4f}). Resetting filter."
+                    f"Warning: Unstable drift fit for {sensor_type} (b={drift_b:.4f}). Resetting filter."
                 )
             # Reset and re-initialize on the next packet
             drift_filter.reset()
-            drift_initialized = False
+            stream.drift_initialized = False  # Set state on the stream object
             # Use a simple offset for this packet
             drift_a = lsl_now - first_device_time
             drift_b = 1.0
