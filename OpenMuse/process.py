@@ -281,6 +281,13 @@ def preprocess_ppg(
         bvp = total_signal / total_weight
         mean_sqi = np.nanmean(list(sqi_scores.values()))
 
+    # Note on polarity: This function returns a BVP signal from reflectance
+    # PPG. In reflectance PPG, the systolic peak (max blood volume)
+    # corresponds to maximum light absorption, resulting in a *trough*
+    # (a minimum value, or "negative peak") in the measured signal.
+    # For heart rate estimation, we typically want systolic peaks as maxima.
+    bvp = -bvp
+
     info = {
         "sqi_scores": sqi_scores,
         "weights": weights,
