@@ -319,6 +319,7 @@ async def _stream_async(
     # theta = [b, a]
     drift_filter = _RLSFilter(dim=2, lam=0.9999, P_init=1e6)
     drift_initialized = False
+    last_update_device_time = 0.0
 
     # --- Other Stream State ---
     streams: Dict[str, SensorStream] = {}
@@ -340,7 +341,7 @@ async def _stream_async(
         lsl_now : float
             The computer's LSL clock time when the BLE message was received.
         """
-        nonlocal drift_filter, drift_initialized  # noqa: F824
+        nonlocal drift_filter, drift_initialized, last_update_device_time  # noqa: F824
 
         if data_array.size == 0 or data_array.shape[1] < 2:
             return  # No data in this packet
@@ -362,10 +363,15 @@ async def _stream_async(
             initial_a = lsl_now - first_device_time
             drift_filter.theta = np.array([1.0, initial_a])
             drift_initialized = True
+            last_update_device_time = first_device_time
         else:
-            # Update the filter with the new (device_time, lsl_now) pair
-            # y = lsl_now, x = [dev_time, 1.0]
-            drift_filter.update(y=lsl_now, x=np.array([first_device_time, 1.0]))
+            # This prevents out-of-order packets from corrupting the model
+            if first_device_time > last_update_device_time:
+                # Update the filter with the new (device_time, lsl_now) pair
+                # y = lsl_now, x = [dev_time, 1.0]
+                drift_filter.update(y=lsl_now, x=np.array([first_device_time, 1.0]))
+                last_update_device_time = first_device_time
+            # (Else: This is an out-of-order packet, ignore it for filter updates)
 
         # Get current model parameters [b, a]
         drift_b, drift_a = drift_filter.theta
