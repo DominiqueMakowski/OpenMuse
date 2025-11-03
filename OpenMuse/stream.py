@@ -164,7 +164,7 @@ class _RLSFilter:
       theta = [b, a] (slope, intercept)
     """
 
-    def __init__(self, dim: int, lam: float = 0.999, P_init: float = 1.0):
+    def __init__(self, dim: int, lam: float = 0.999, P_init: float = 0.1):
         self.dim = dim
         self.lam = lam  # Forgetting factor
         self.P_init = P_init  # Initial covariance
@@ -379,9 +379,9 @@ async def _stream_async(
         drift_b, drift_a = drift_filter.theta
 
         # Safety check: If filter diverges, reset it
-        if not (0.9 < drift_b < 1.1):
+        if not (0.5 < drift_b < 1.5):
             if verbose:
-                # DEBUG ----------
+                # DEBUG --------------
                 time_diff = first_device_time - stream.last_update_device_time
                 print(f"\n--- DEBUG: UNSTABLE FIT DETECTED ({sensor_type}) ---")
                 print(f"    New Slope (b): {drift_b:.6f}")
@@ -390,7 +390,7 @@ async def _stream_async(
                 print(f"    Input Device Time (x): {first_device_time:.3f}")
                 print(f"    Last Device Time: {last_update_device_time:.3f}")
                 print(f"    Time Diff (New - Last): {time_diff:.3f}s")
-                #---------------------
+                # ---------------------
                 print(
                     f"Warning: Unstable drift fit for {sensor_type} (b={drift_b:.4f}). Resetting filter."
                 )
