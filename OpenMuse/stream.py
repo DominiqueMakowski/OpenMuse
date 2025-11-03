@@ -151,7 +151,7 @@ from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
 MAX_BUFFER_PACKETS = 52  # 52 packets per sensor
-
+FILTER_WARMUP_PERIOD = 1.0  # warmup period in device_time seconds to avoid t=0 instability
 
 class _RLSFilter:
     """
@@ -366,14 +366,21 @@ async def _stream_async(
             stream.drift_initialized = True  # Set state on the stream object
             stream.last_update_device_time = first_device_time
         else:
-            # Only update filter if this packet is 'newer'
-            # This prevents out-of-order packets from corrupting the model
-            if first_device_time > last_update_device_time:
+            # Check conditions for updating the filter
+            is_newer_packet = first_device_time > last_update_device_time
+            is_past_warmup = first_device_time > FILTER_WARMUP_PERIOD
+
+            # We ONLY update if the packet is new AND we are past the warmup
+            if is_newer_packet and is_past_warmup:
                 # Update the filter with the new (device_time, lsl_now) pair
                 # y = lsl_now, x = [dev_time, 1.0]
                 drift_filter.update(y=lsl_now, x=np.array([first_device_time, 1.0]))
                 stream.last_update_device_time = first_device_time
-            # (Else: This is an out-of-order packet, ignore it for filter updates)
+            elif is_newer_packet:
+                # We're in the warmup period.
+                # Do NOT update the filter, but DO update the last_time tracker.
+                stream.last_update_device_time = first_device_time
+            # (Else: This is an out-of-order packet, ignore it completely)
 
         # Get current model parameters [b, a]
         drift_b, drift_a = drift_filter.theta
