@@ -1,10 +1,10 @@
 """OpenMuse: Minimal utilities for Muse EEG devices."""
 
+from .decode import decode_rawdata, parse_message
 from .find import find_devices
-from .record import record
 from .muse import MuseS
-from .decode import parse_message, decode_rawdata
+from .record import record
 from .stream import stream
 from .view import view
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"

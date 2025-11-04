@@ -11,7 +11,7 @@ OPTICS
 ----------------------------------------------------------
 Optics sensors (64 Hz sampling rate):
 Placement is on the forehead (roughly centred above the nasion, in-between AF7 and AF8).
-The source-detector separation is ~3.5 cm (to be confirmed).
+The source-detector separation appears to be ~3.0 cm.
 
 - OPTICS_LO_NIR
   - 730nm (NIR), Outer Left
@@ -281,6 +281,13 @@ def preprocess_ppg(
         bvp = total_signal / total_weight
         mean_sqi = np.nanmean(list(sqi_scores.values()))
 
+    # Note on polarity: This function returns a BVP signal from reflectance
+    # PPG. In reflectance PPG, the systolic peak (max blood volume)
+    # corresponds to maximum light absorption, resulting in a *trough*
+    # (a minimum value, or "negative peak") in the measured signal.
+    # For heart rate estimation, we typically want systolic peaks as maxima.
+    bvp = -bvp
+
     info = {
         "sqi_scores": sqi_scores,
         "weights": weights,
@@ -300,7 +307,7 @@ def preprocess_fnirs(
     df: pd.DataFrame,
     sampling_rate: int = 64,
     band_cutoff: tuple = (0.01, 0.1),  # Hemodynamic band
-    separation: float = 3.5,  # cm
+    separation: float = 3.0,  # cm
     dpf: float = 7.0,  # Adult prefrontal
     sqi_window_sec: float = 10.0,  # Window for SQI calculation
     verbose: bool = False,
@@ -316,7 +323,7 @@ def preprocess_fnirs(
         band_cutoff: Tuple (low, high) for the hemodynamic bandpass
             filter in Hz. Default (0.01, 0.1) is standard for isolating
             task-related hemodynamic responses.
-        separation: The source-detector separation in cm (default: 3.5).
+        separation: The source-detector separation in cm.
             This is critical for the mBLL calculation.
         dpf: The Differential Pathlength Factor, an age- and tissue-dependent
             scalar (default: 7.0, common for adult prefrontal cortex).
@@ -365,8 +372,8 @@ def preprocess_fnirs(
         as this indicates non-physiological signal contamination.
 
     **Channel Locations:**
-    -   Inner (LI, RI): Medial prefrontal cortex (mPFC).
-    -   Outer (LO, RO): Lateral prefrontal cortex (LPFC).
+    -   Inner (LI, RI): Medial frontopolar cortex (mPFC). Medial part of BA 10.
+    -   Outer (LO, RO): Lateral frontopolar cortex (LPFC). Lateral part of BA 10.
 
     **1. Block Designs (e.g., 30s Task vs. 30s Rest):**
     * **Epoching:** Slice `hb_df` (e.g., `hb_df['LI_HbDiff']`) into
