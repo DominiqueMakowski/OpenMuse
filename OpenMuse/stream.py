@@ -379,7 +379,9 @@ async def _stream_async(
 
         # Safety check: If filter diverges, reset it
         if not (0.5 < drift_b < 1.5):
-            if verbose and (lsl_now - start_time) > 2.0:  # Suppress early warnings
+            if (
+                verbose and (lsl_now - start_time) > 2.0
+            ):  # Suppress early warnings due to warmup
                 # Calculate the *correct* time diff using the old value
                 time_diff = first_device_time - old_last_update_device_time
 
@@ -517,6 +519,7 @@ async def _stream_async(
 
         # Create LSL outlets
         streams = _create_lsl_outlets(client.name, address)
+        start_time = time.monotonic()
 
         # Subscribe to data and configure device
         data_callbacks = {MuseS.EEG_UUID: _on_data}
@@ -528,7 +531,6 @@ async def _stream_async(
             print("Streaming data... (Press Ctrl+C to stop)")
 
         # --- Main streaming loop ---
-        start_time = time.monotonic()
         while True:
             await asyncio.sleep(0.5)  # Main loop sleep
             # Check duration
