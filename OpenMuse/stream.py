@@ -39,8 +39,7 @@ Packet Reordering Buffer - Critical Design Component:
 **WHY BUFFERING IS NECESSARY:**
 
 BLE transmission can REORDER entire messages (not just individual packets). Analysis shows:
-- ~5% of messages arrive out of order
-- Backward jumps can exceed 80ms in severe cases
+- Some messages arrive out of order
 - Device's timestamps are CORRECT (device clock is monotonic and accurate)
 - But messages processed in arrival order → non-monotonic timestamps
 
