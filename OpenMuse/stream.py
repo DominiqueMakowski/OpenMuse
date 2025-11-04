@@ -184,33 +184,30 @@ class _RLSFilter:
 
     def update(self, y: float, x: np.ndarray):
         """
-        Update the filter with a new (device_time, lsl_now) pair.
-
-        Parameters
-        ----------
-        y : float
-            The 'output' (lsl_now).
-        x : np.ndarray
-            The 'input' vector [device_time, 1.0].
+        Numerically-stable RLS update using Joseph form.
+        y : scalar output (lsl_now)
+        x : input vector shape (2,) corresponding to [device_time, 1.0]
         """
-        # Ensure x is a column vector for matrix math
-        x = x.reshape(-1, 1)
-
-        # 1. Calculate gain vector (k)
+        x = x.reshape(-1, 1)  # column
         P_x = self.P @ x
-        den = self.lam + (x.T @ P_x)
-        k = P_x / den
+        den = float(self.lam + (x.T @ P_x))  # scalar
 
-        # 2. Calculate estimation error (e)
-        # y_pred = x.T @ self.theta
-        # e = y - y_pred
-        e = y - (x.T @ self.theta)
+        # gain
+        k = P_x / den  # shape (dim,1)
 
-        # 3. Update parameters (theta)
+        # prediction error
+        y_pred = float(x.T @ self.theta)
+        e = y - y_pred
+
+        # update theta
         self.theta = self.theta + (k * e).flatten()
 
-        # 4. Update covariance matrix (P)
-        self.P = (self.P - (k @ x.T @ self.P)) / self.lam
+        # Joseph form for P update to preserve symmetry
+        I = np.eye(self.dim)
+        KX = k @ x.T
+        self.P = (I - KX) @ self.P @ (I - KX).T + (k @ k.T) * 1e-12
+        # apply forgetting factor
+        self.P /= self.lam
 
 
 @dataclass
@@ -359,6 +356,8 @@ async def _stream_async(
         # --- Drift Correction ---
         first_device_time = device_times[0]
 
+        old_last_update_device_time = last_update_device_time
+
         if not drift_initialized:
             # Initialize this sensor's filter
             initial_a = lsl_now - first_device_time
@@ -382,14 +381,15 @@ async def _stream_async(
         if not (0.5 < drift_b < 1.5):
             if verbose:
                 # DEBUG --------------
-                time_diff = first_device_time - stream.last_update_device_time
-                print(f"\n--- DEBUG: UNSTABLE FIT DETECTED ({sensor_type}) ---")
-                print(f"    New Slope (b): {drift_b:.6f}")
-                print(f"    New Intercept (a): {drift_a:.6f}")
-                print(f"    Input LSL Time (y): {lsl_now:.3f}")
-                print(f"    Input Device Time (x): {first_device_time:.3f}")
-                print(f"    Last Device Time: {last_update_device_time:.3f}")
-                print(f"    Time Diff (New - Last): {time_diff:.3f}s")
+                # Calculate the *correct* time diff using the old value
+                time_diff = first_device_time - old_last_update_device_time
+
+                # Print a single, dense line with all key info
+                print(
+                    f"Warning: Unstable drift fit for {sensor_type}. Resetting filter. "
+                    f"[Slope(b)={drift_b:.4f}, TimeDiff={time_diff:.3f}s, "
+                    f"NewDevTime={first_device_time:.3f}, LastDevTime={old_last_update_device_time:.3f}]"
+                )
                 # ---------------------
                 print(
                     f"Warning: Unstable drift fit for {sensor_type} (b={drift_b:.4f}). Resetting filter."
