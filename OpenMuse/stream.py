@@ -380,7 +380,7 @@ async def _stream_async(
         # Safety check: If filter diverges, reset it
         if not (0.5 < drift_b < 1.5):
             if (
-                verbose and (lsl_now - start_time) > 2.0
+                verbose and (lsl_now - start_time) > 5.0
             ):  # Suppress early warnings due to warmup
                 # Calculate the *correct* time diff using the old value
                 time_diff = first_device_time - old_last_update_device_time
