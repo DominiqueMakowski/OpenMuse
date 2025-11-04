@@ -379,8 +379,7 @@ async def _stream_async(
 
         # Safety check: If filter diverges, reset it
         if not (0.5 < drift_b < 1.5):
-            if verbose:
-                # DEBUG --------------
+            if verbose and (lsl_now - start_time) > 2.0:  # Suppress early warnings
                 # Calculate the *correct* time diff using the old value
                 time_diff = first_device_time - old_last_update_device_time
 
@@ -389,10 +388,6 @@ async def _stream_async(
                     f"Warning: Unstable drift fit for {sensor_type}. Resetting filter. "
                     f"[Slope(b)={drift_b:.4f}, TimeDiff={time_diff:.3f}s, "
                     f"NewDevTime={first_device_time:.3f}, LastDevTime={old_last_update_device_time:.3f}]"
-                )
-                # ---------------------
-                print(
-                    f"Warning: Unstable drift fit for {sensor_type} (b={drift_b:.4f}). Resetting filter."
                 )
             # Reset and re-initialize on the next packet
             drift_filter.reset()
