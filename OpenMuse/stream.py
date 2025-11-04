@@ -408,7 +408,7 @@ async def _stream_async(
 
     def _flush_buffer():
         """Sort and push all buffered samples to LSL."""
-        nonlocal last_flush_time, samples_sent
+        nonlocal last_flush_time, samples_sent  # noqa: F824
         last_flush_time = time.monotonic()
 
         for sensor_type, stream in streams.items():
