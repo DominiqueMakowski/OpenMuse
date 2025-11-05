@@ -135,8 +135,14 @@ import bleak
 import numpy as np
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
-from .decode import (ACCGYRO_CHANNELS, BATTERY_CHANNELS, EEG_CHANNELS,
-                     OPTICS_CHANNELS, make_timestamps, parse_message)
+from .decode import (
+    ACCGYRO_CHANNELS,
+    BATTERY_CHANNELS,
+    EEG_CHANNELS,
+    OPTICS_CHANNELS,
+    make_timestamps,
+    parse_message,
+)
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
@@ -155,7 +161,7 @@ class RLSFilter:
       theta = [b, a] (slope, intercept)
     """
 
-    def __init__(self, dim: int, lam: float, P_init: float):
+    def __init__(self, dim: int, lam: float = 0.999, P_init: float = 0.1):
         self.dim = dim
         self.lam = lam  # Forgetting factor
         self.P_init = P_init  # Initial covariance
@@ -214,7 +220,7 @@ class SensorStream:
     sample_counter: int = 0
     # --- Per-stream state for online drift correction ---
     drift_filter: RLSFilter = field(
-        default_factory=lambda: RLSFilter(dim=2, lam=0.995, P_init=1e6)
+        default_factory=lambda: RLSFilter(dim=2, lam=0.9999, P_init=1e6)
     )
     drift_initialized: bool = False
     last_update_device_time: float = 0.0
@@ -352,15 +358,14 @@ async def _stream_async(
         samples = data_array[:, 1:]
 
         # --- Drift Correction ---
-        # Get the last device time from the chunk.
-        last_device_time = device_times[-1]
+        first_device_time = device_times[0]
 
         if not drift_initialized:
-            # Initialize this sensor's filter using the last sample
-            initial_a = lsl_now - last_device_time
+            # Initialize this sensor's filter
+            initial_a = lsl_now - first_device_time
             drift_filter.theta = np.array([1.0, initial_a])
             stream.drift_initialized = True
-            stream.last_update_device_time = last_device_time # Use last time
+            stream.last_update_device_time = first_device_time
             # Use initial parameters
             drift_b, drift_a = 1.0, initial_a
         else:
@@ -368,30 +373,31 @@ async def _stream_async(
             prev_device_time = last_update_device_time
 
             # Only update filter if this packet is 'newer'
-            # We use last_device_time to check recency
-            if last_device_time > last_update_device_time:
-                # Update the filter with the new (last_device_time, lsl_now) pair
-                drift_filter.update(y=lsl_now, x=np.array([last_device_time, 1.0]))
-                stream.last_update_device_time = last_device_time
+            # This prevents out-of-order packets from corrupting the model
+            if first_device_time > last_update_device_time:
+                # Update the filter with the new (device_time, lsl_now) pair
+                drift_filter.update(y=lsl_now, x=np.array([first_device_time, 1.0]))
+                stream.last_update_device_time = first_device_time
 
             # Get current model parameters [b, a]
             drift_b, drift_a = drift_filter.theta
 
             # Safety check: If filter diverges, reset it
             if not (0.5 < drift_b < 1.5):
-                time_diff = last_device_time - prev_device_time
-                # Suppress early warnings during warmup
-                if verbose and (lsl_now - start_time) > 5.0:
+                time_diff = first_device_time - prev_device_time
+                if (
+                    verbose and (lsl_now - start_time) > 5.0
+                ):  # Suppress early warnings during warmup
                     print(
                         f"Warning: Unstable drift fit for {sensor_type}. Resetting filter. "
                         f"[Slope(b)={drift_b:.4f}, TimeDiff={time_diff:.3f}s, "
-                        f"NewDevTime={last_device_time:.3f}, LastDevTime={prev_device_time:.3f}]"
+                        f"NewDevTime={first_device_time:.3f}, LastDevTime={prev_device_time:.3f}]"
                     )
                 # Reset and re-initialize
                 drift_filter.reset()
                 stream.drift_initialized = False
                 # Use a simple offset for this packet
-                drift_a = lsl_now - last_device_time
+                drift_a = lsl_now - first_device_time
                 drift_b = 1.0
 
         # Apply the correction: lsl_timestamps = a + (b * device_times)
