@@ -161,7 +161,7 @@ class RLSFilter:
       theta = [b, a] (slope, intercept)
     """
 
-    def __init__(self, dim: int, lam: float = 0.999, P_init: float = 0.1):
+    def __init__(self, dim: int, lam: float, P_init: float):
         self.dim = dim
         self.lam = lam  # Forgetting factor
         self.P_init = P_init  # Initial covariance
