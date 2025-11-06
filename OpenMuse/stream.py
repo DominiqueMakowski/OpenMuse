@@ -358,14 +358,15 @@ async def _stream_async(
         samples = data_array[:, 1:]
 
         # --- Drift Correction ---
-        first_device_time = device_times[0]
+        # Get the last device time from the chunk.
+        last_device_time = device_times[-1]
 
         if not drift_initialized:
             # Initialize this sensor's filter
-            initial_a = lsl_now - first_device_time
+            initial_a = lsl_now - last_device_time
             drift_filter.theta = np.array([1.0, initial_a])
             stream.drift_initialized = True
-            stream.last_update_device_time = first_device_time
+            stream.last_update_device_time = last_device_time
             # Use initial parameters
             drift_b, drift_a = 1.0, initial_a
         else:
@@ -374,30 +375,30 @@ async def _stream_async(
 
             # Only update filter if this packet is 'newer'
             # This prevents out-of-order packets from corrupting the model
-            if first_device_time > last_update_device_time:
+            if last_device_time  > last_update_device_time:
                 # Update the filter with the new (device_time, lsl_now) pair
-                drift_filter.update(y=lsl_now, x=np.array([first_device_time, 1.0]))
-                stream.last_update_device_time = first_device_time
+                drift_filter.update(y=lsl_now, x=np.array([last_device_time , 1.0]))
+                stream.last_update_device_time = last_device_time
 
             # Get current model parameters [b, a]
             drift_b, drift_a = drift_filter.theta
 
             # Safety check: If filter diverges, reset it
             if not (0.5 < drift_b < 1.5):
-                time_diff = first_device_time - prev_device_time
+                time_diff = last_device_time  - prev_device_time
                 if (
                     verbose and (lsl_now - start_time) > 5.0
                 ):  # Suppress early warnings during warmup
                     print(
                         f"Warning: Unstable drift fit for {sensor_type}. Resetting filter. "
                         f"[Slope(b)={drift_b:.4f}, TimeDiff={time_diff:.3f}s, "
-                        f"NewDevTime={first_device_time:.3f}, LastDevTime={prev_device_time:.3f}]"
+                        f"NewDevTime={last_device_time :.3f}, LastDevTime={prev_device_time:.3f}]"
                     )
                 # Reset and re-initialize
                 drift_filter.reset()
                 stream.drift_initialized = False
                 # Use a simple offset for this packet
-                drift_a = lsl_now - first_device_time
+                drift_a = lsl_now - last_device_time
                 drift_b = 1.0
 
         # Apply the correction: lsl_timestamps = a + (b * device_times)
