@@ -8,10 +8,9 @@ from vispy import app, gloo
 from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
 
-from .utils import configure_lsl_api_cfg
 from collections import deque
-import matplotlib.pyplot as plt
-from matplotlib import patches
+
+from .utils import configure_lsl_api_cfg
 
 # Visualization constants
 CHANNEL_DETECTION_DURATION = 2.0  # Seconds to collect data for channel detection
@@ -157,6 +156,61 @@ class RealtimeViewer:
         self.duration = duration
         self.verbose = verbose
         self.start_time = time.time()
+
+
+                # -------- Detect optional Muse_BATTERY stream --------
+        self.battery_stream_idx = None
+        for stream_idx, s in enumerate(streams):
+            if "BATTERY" in s.name.upper():
+                self.battery_stream_idx = stream_idx
+                break
+
+        # -------- Battery visualizer setup --------
+        self.battery_history = deque(maxlen=180)
+        self.battery_level = None  # 0–100%
+
+        self.battery_text = TextVisual(
+            "Battery: ---%",
+            pos=(0, 0),
+            color="yellow",
+            font_size=12,
+            anchor_x="right",
+            anchor_y="top",
+            bold=True,
+        )
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+        )
+
+        # Battery bar shaders
+        BAT_VERT = """
+        attribute vec2 a_position;
+        uniform mat4 u_projection;
+        void main() {
+            gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
+        }
+        """
+        BAT_FRAG = """
+        uniform vec4 u_color;
+        void main() {
+            gl_FragColor = u_color;
+        }
+        """
+
+        # Programs for battery bar background and fill
+        self.battery_prog_bg = gloo.Program(BAT_VERT, BAT_FRAG)
+        self.battery_prog_bg["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+        self.battery_prog_fill = gloo.Program(BAT_VERT, BAT_FRAG)
+        self.battery_prog_fill["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+
+        self._battery_bg_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
+        self._battery_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
+        self.battery_prog_bg["a_position"] = self._battery_bg_vbo
+        self.battery_prog_fill["a_position"] = self._battery_fill_vbo
+
+        # Normalized placement (top-right corner)
+        self._battery_rect = dict(x=0.82, y=0.92, w=0.15, h=0.05)
+
 
         # Collect channel info from all streams
         # First, detect active channels (non-zero variance)
@@ -540,6 +594,56 @@ class RealtimeViewer:
             text_visual.pos = (x_pos, height - 25)
             text_visual.draw()
 
+            # -------- Battery overlay drawing --------
+        if self.battery_level is not None:
+            width, height = self.canvas.size
+            self.battery_text.pos = (width - 10, 10)
+            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
+
+            # Color-code based on level
+            if self.battery_level >= 60:
+                col = (0.2, 0.85, 0.2, 1.0)
+                self.battery_text.color = "lime"
+            elif self.battery_level >= 30:
+                col = (0.95, 0.75, 0.15, 1.0)
+                self.battery_text.color = "yellow"
+            else:
+                col = (0.9, 0.25, 0.2, 1.0)
+                self.battery_text.color = "red"
+
+            x = self._battery_rect["x"]
+            y = self._battery_rect["y"]
+            w = self._battery_rect["w"]
+            h = self._battery_rect["h"]
+
+            # Background bar
+            bg = np.array([
+                [x, y],
+                [x + w, y],
+                [x, y + h],
+                [x + w, y + h],
+            ], dtype=np.float32)
+            self._battery_bg_vbo.set_data(bg)
+            self.battery_prog_bg["u_color"] = (0.25, 0.25, 0.25, 1.0)
+            self.battery_prog_bg.draw("triangle_strip")
+
+            # Fill proportional to battery level
+            pad = 0.002
+            frac = self.battery_level / 100.0
+            w_fill = max(0.0, min(1.0, frac)) * (w - 2 * pad)
+            fill = np.array([
+                [x + pad, y + pad],
+                [x + pad + w_fill, y + pad],
+                [x + pad, y + h - pad],
+                [x + pad + w_fill, y + h - pad],
+            ], dtype=np.float32)
+            self._battery_fill_vbo.set_data(fill)
+            self.battery_prog_fill["u_color"] = col
+            self.battery_prog_fill.draw("triangle_strip")
+
+            self.battery_text.draw()
+
+
     def on_resize(self, event):
         """Handle window resize."""
         gloo.set_viewport(0, 0, *event.size)
@@ -556,6 +660,12 @@ class RealtimeViewer:
                 )
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+
+                # Keep battery text aligned on resize
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *event.size)
+        )
+
 
     def _update_time_labels(self):
         """Update time labels based on current window_size."""
@@ -846,6 +956,20 @@ class RealtimeViewer:
             channel_global_idx = self.channel_info.index(ch_info)
             self.data[:, channel_global_idx] = normalized_data
 
+                # -------- Battery stream update --------
+        if self.battery_stream_idx is not None:
+            bat_stream = self.streams[self.battery_stream_idx]
+            try:
+                bat_data, bat_ts = bat_stream.get_data(winsize=5.0)
+                if bat_data.shape[1] > 0:
+                    latest = float(bat_data[0, -1])
+                    latest = max(0.0, min(100.0, latest))
+                    self.battery_level = latest
+                    self.battery_history.append(latest)
+            except Exception:
+                pass
+
+
         # Update vertex positions
         self.program["a_position"].set_data(self.data.T.ravel().astype(np.float32))
 
@@ -932,10 +1056,11 @@ def view(
     streams = []
     if stream_name is None:
         # Try all possible Muse streams
-        for name in ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS"]:
+        for name in ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS", "Muse_BATTERY"]:
             if verbose:
                 print(f"Looking for LSL stream '{name}'...")
             try:
+                bufsize = window_size if name != "Muse_BATTERY" else 120.0
                 stream = StreamLSL(bufsize=window_size, name=name)
                 stream.connect(timeout=2.0)
                 streams.append(stream)
@@ -975,123 +1100,3 @@ def view(
         verbose=verbose,
     )
     viewer.show()
-
-
-def view_battery(
-    stream_name: Optional[str] = None,
-    history_seconds: int = 300,
-    update_interval: float = 1.0,
-    verbose: bool = True,
-) -> None:
-    """
-    Simple battery level viewer using matplotlib.
-
-    Connects to the Muse battery LSL stream (default "Muse_BATTERY") and displays
-    a live-updating small plot showing recent battery percentage history and a
-    large current percentage gauge.
-
-    Parameters:
-    - stream_name: specific LSL stream name to connect to (default: Muse_BATTERY)
-    - history_seconds: how many seconds of history to show in the plot
-    - update_interval: how often (seconds) to refresh the plot (default 1.0)
-    - verbose: print connection and status messages
-    """
-    configure_lsl_api_cfg()
-
-    from mne_lsl.stream import StreamLSL
-
-    target_name = stream_name or "Muse_BATTERY"
-
-    if verbose:
-        print(f"Looking for LSL stream '{target_name}'...")
-
-    try:
-        stream = StreamLSL(bufsize=history_seconds, name=target_name)
-        stream.connect(timeout=5.0)
-        if verbose:
-            print(f"  ✓ Connected to {target_name}")
-    except Exception as exc:
-        print(f"Error: Could not connect to LSL stream '{target_name}': {exc}")
-        return
-
-    # Prepare storage for history (timestamps, values)
-    sfreq = max(1, int(stream.info.get("sfreq", 1)))
-    maxlen = int(history_seconds * sfreq)
-    times = deque(maxlen=maxlen)
-    values = deque(maxlen=maxlen)
-
-    # Setup matplotlib figure
-    plt.ion()
-    fig = plt.figure(figsize=(6, 3))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1, 2], wspace=0.3)
-
-    ax_gauge = fig.add_subplot(gs[0, 0])
-    ax_plot = fig.add_subplot(gs[0, 1])
-
-    # Gauge: large text and colored rectangle
-    gauge_text = ax_gauge.text(
-        0.5, 0.6, "--%", ha="center", va="center", fontsize=30, weight="bold"
-    )
-    ax_gauge.axis("off")
-    gauge_bar = patches.Rectangle((0.1, 0.1), 0.8, 0.15, transform=ax_gauge.transAxes)
-    ax_gauge.add_patch(gauge_bar)
-
-    # History plot
-    ax_plot.set_ylim(0, 100)
-    ax_plot.set_xlim(-history_seconds, 0)
-    ax_plot.set_xlabel("Seconds ago")
-    ax_plot.set_ylabel("Battery %")
-    line_plot, = ax_plot.plot([], [], "-o", markersize=4)
-    ax_plot.grid(True, alpha=0.3)
-
-    try:
-        while plt.fignum_exists(fig.number):
-            # Pull recent data from the stream
-            try:
-                data, timestamps = stream.get_data(winsize=history_seconds)
-            except Exception:
-                data = np.empty((0, 0))
-                timestamps = []
-
-            if data.shape[1] > 0 and len(timestamps) > 0:
-                # Battery channel is 1D: shape (1, n)
-                for t, val in zip(timestamps, data[0, :]):
-                    times.append(t)
-                    values.append(float(val))
-
-                # Build x values as seconds-ago for plotting
-                now = times[-1] if len(times) > 0 else time.time()
-                x = [t - now for t in times]
-                y = list(values)
-
-                # Update history plot
-                line_plot.set_data(x, y)
-                ax_plot.set_xlim(min(-history_seconds, min(x) if x else -history_seconds), 0)
-
-                # Update gauge (use latest value)
-                current = y[-1]
-                gauge_text.set_text(f"{current:.0f}%")
-
-                # Set gauge color: green >=60, yellow 30-60, red <30
-                if current >= 60:
-                    color = "#2ca02c"
-                elif current >= 30:
-                    color = "#ffbf00"
-                else:
-                    color = "#d62728"
-
-                gauge_bar.set_facecolor(color)
-                gauge_bar.set_edgecolor("black")
-
-            # Redraw
-            fig.canvas.draw_idle()
-            plt.pause(update_interval)
-
-    except KeyboardInterrupt:
-        pass
-    finally:
-        try:
-            stream.disconnect()
-        except Exception:
-            pass
-        plt.close(fig)
