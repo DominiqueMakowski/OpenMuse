@@ -261,7 +261,7 @@ class RealtimeViewer:
             "Battery: ---%",
             pos=(0, 0),
             color="yellow",
-            font_size=12,
+            font_size=8,
             anchor_x="right",
             anchor_y="top",
             bold=True,
@@ -297,7 +297,7 @@ class RealtimeViewer:
         self.battery_prog_fill["a_position"] = self._battery_fill_vbo
 
         # Normalized placement (top-right corner)
-        self._battery_rect = dict(x=0.82, y=0.92, w=0.15, h=0.05)
+        self._battery_rect = dict(x=0.80, y=0.80, w=0.15, h=0.05)
 
         # Create GLOO program for signals
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
