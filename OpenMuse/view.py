@@ -9,6 +9,9 @@ from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
 
 from .utils import configure_lsl_api_cfg
+from collections import deque
+import matplotlib.pyplot as plt
+from matplotlib import patches
 
 # Visualization constants
 CHANNEL_DETECTION_DURATION = 2.0  # Seconds to collect data for channel detection
@@ -180,7 +183,7 @@ class RealtimeViewer:
 
         for stream_idx, stream in enumerate(streams):
             stream_name = stream.name
-            is_eeg = "EGG" in stream_name.upper()
+            is_eeg = "EEG" in stream_name.upper()
             is_optics = "OPTICS" in stream_name.upper()
 
             for ch_idx, ch_name in enumerate(stream.info.ch_names):
@@ -972,3 +975,123 @@ def view(
         verbose=verbose,
     )
     viewer.show()
+
+
+def view_battery(
+    stream_name: Optional[str] = None,
+    history_seconds: int = 300,
+    update_interval: float = 1.0,
+    verbose: bool = True,
+) -> None:
+    """
+    Simple battery level viewer using matplotlib.
+
+    Connects to the Muse battery LSL stream (default "Muse_BATTERY") and displays
+    a live-updating small plot showing recent battery percentage history and a
+    large current percentage gauge.
+
+    Parameters:
+    - stream_name: specific LSL stream name to connect to (default: Muse_BATTERY)
+    - history_seconds: how many seconds of history to show in the plot
+    - update_interval: how often (seconds) to refresh the plot (default 1.0)
+    - verbose: print connection and status messages
+    """
+    configure_lsl_api_cfg()
+
+    from mne_lsl.stream import StreamLSL
+
+    target_name = stream_name or "Muse_BATTERY"
+
+    if verbose:
+        print(f"Looking for LSL stream '{target_name}'...")
+
+    try:
+        stream = StreamLSL(bufsize=history_seconds, name=target_name)
+        stream.connect(timeout=5.0)
+        if verbose:
+            print(f"  ✓ Connected to {target_name}")
+    except Exception as exc:
+        print(f"Error: Could not connect to LSL stream '{target_name}': {exc}")
+        return
+
+    # Prepare storage for history (timestamps, values)
+    sfreq = max(1, int(stream.info.get("sfreq", 1)))
+    maxlen = int(history_seconds * sfreq)
+    times = deque(maxlen=maxlen)
+    values = deque(maxlen=maxlen)
+
+    # Setup matplotlib figure
+    plt.ion()
+    fig = plt.figure(figsize=(6, 3))
+    gs = fig.add_gridspec(1, 2, width_ratios=[1, 2], wspace=0.3)
+
+    ax_gauge = fig.add_subplot(gs[0, 0])
+    ax_plot = fig.add_subplot(gs[0, 1])
+
+    # Gauge: large text and colored rectangle
+    gauge_text = ax_gauge.text(
+        0.5, 0.6, "--%", ha="center", va="center", fontsize=30, weight="bold"
+    )
+    ax_gauge.axis("off")
+    gauge_bar = patches.Rectangle((0.1, 0.1), 0.8, 0.15, transform=ax_gauge.transAxes)
+    ax_gauge.add_patch(gauge_bar)
+
+    # History plot
+    ax_plot.set_ylim(0, 100)
+    ax_plot.set_xlim(-history_seconds, 0)
+    ax_plot.set_xlabel("Seconds ago")
+    ax_plot.set_ylabel("Battery %")
+    line_plot, = ax_plot.plot([], [], "-o", markersize=4)
+    ax_plot.grid(True, alpha=0.3)
+
+    try:
+        while plt.fignum_exists(fig.number):
+            # Pull recent data from the stream
+            try:
+                data, timestamps = stream.get_data(winsize=history_seconds)
+            except Exception:
+                data = np.empty((0, 0))
+                timestamps = []
+
+            if data.shape[1] > 0 and len(timestamps) > 0:
+                # Battery channel is 1D: shape (1, n)
+                for t, val in zip(timestamps, data[0, :]):
+                    times.append(t)
+                    values.append(float(val))
+
+                # Build x values as seconds-ago for plotting
+                now = times[-1] if len(times) > 0 else time.time()
+                x = [t - now for t in times]
+                y = list(values)
+
+                # Update history plot
+                line_plot.set_data(x, y)
+                ax_plot.set_xlim(min(-history_seconds, min(x) if x else -history_seconds), 0)
+
+                # Update gauge (use latest value)
+                current = y[-1]
+                gauge_text.set_text(f"{current:.0f}%")
+
+                # Set gauge color: green >=60, yellow 30-60, red <30
+                if current >= 60:
+                    color = "#2ca02c"
+                elif current >= 30:
+                    color = "#ffbf00"
+                else:
+                    color = "#d62728"
+
+                gauge_bar.set_facecolor(color)
+                gauge_bar.set_edgecolor("black")
+
+            # Redraw
+            fig.canvas.draw_idle()
+            plt.pause(update_interval)
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            stream.disconnect()
+        except Exception:
+            pass
+        plt.close(fig)
