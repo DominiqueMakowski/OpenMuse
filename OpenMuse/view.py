@@ -180,7 +180,7 @@ class RealtimeViewer:
 
         for stream_idx, stream in enumerate(streams):
             stream_name = stream.name
-            is_eeg = "EEG" in stream_name.upper()
+            is_eeg = "EGG" in stream_name.upper()
             is_optics = "OPTICS" in stream_name.upper()
 
             for ch_idx, ch_name in enumerate(stream.info.ch_names):
