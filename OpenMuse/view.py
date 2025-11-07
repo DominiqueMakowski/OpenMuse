@@ -158,59 +158,6 @@ class RealtimeViewer:
         self.start_time = time.time()
 
 
-                # -------- Detect optional Muse_BATTERY stream --------
-        self.battery_stream_idx = None
-        for stream_idx, s in enumerate(streams):
-            if "BATTERY" in s.name.upper():
-                self.battery_stream_idx = stream_idx
-                break
-
-        # -------- Battery visualizer setup --------
-        self.battery_history = deque(maxlen=180)
-        self.battery_level = None  # 0–100%
-
-        self.battery_text = TextVisual(
-            "Battery: ---%",
-            pos=(0, 0),
-            color="yellow",
-            font_size=12,
-            anchor_x="right",
-            anchor_y="top",
-            bold=True,
-        )
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-        )
-
-        # Battery bar shaders
-        BAT_VERT = """
-        attribute vec2 a_position;
-        uniform mat4 u_projection;
-        void main() {
-            gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
-        }
-        """
-        BAT_FRAG = """
-        uniform vec4 u_color;
-        void main() {
-            gl_FragColor = u_color;
-        }
-        """
-
-        # Programs for battery bar background and fill
-        self.battery_prog_bg = gloo.Program(BAT_VERT, BAT_FRAG)
-        self.battery_prog_bg["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
-        self.battery_prog_fill = gloo.Program(BAT_VERT, BAT_FRAG)
-        self.battery_prog_fill["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
-
-        self._battery_bg_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
-        self._battery_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
-        self.battery_prog_bg["a_position"] = self._battery_bg_vbo
-        self.battery_prog_fill["a_position"] = self._battery_fill_vbo
-
-        # Normalized placement (top-right corner)
-        self._battery_rect = dict(x=0.82, y=0.92, w=0.15, h=0.05)
-
 
         # Collect channel info from all streams
         # First, detect active channels (non-zero variance)
@@ -298,6 +245,59 @@ class RealtimeViewer:
             size=(1400, 900),
             position=(100, 100),
         )
+
+               # -------- Detect optional Muse_BATTERY stream --------
+        self.battery_stream_idx = None
+        for stream_idx, s in enumerate(streams):
+            if "BATTERY" in s.name.upper():
+                self.battery_stream_idx = stream_idx
+                break
+
+        # -------- Battery visualizer setup --------
+        self.battery_history = deque(maxlen=180)
+        self.battery_level = None  # 0–100%
+
+        self.battery_text = TextVisual(
+            "Battery: ---%",
+            pos=(0, 0),
+            color="yellow",
+            font_size=12,
+            anchor_x="right",
+            anchor_y="top",
+            bold=True,
+        )
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+        )
+
+        # Battery bar shaders
+        BAT_VERT = """
+        attribute vec2 a_position;
+        uniform mat4 u_projection;
+        void main() {
+            gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
+        }
+        """
+        BAT_FRAG = """
+        uniform vec4 u_color;
+        void main() {
+            gl_FragColor = u_color;
+        }
+        """
+
+        # Programs for battery bar background and fill
+        self.battery_prog_bg = gloo.Program(BAT_VERT, BAT_FRAG)
+        self.battery_prog_bg["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+        self.battery_prog_fill = gloo.Program(BAT_VERT, BAT_FRAG)
+        self.battery_prog_fill["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+
+        self._battery_bg_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
+        self._battery_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
+        self.battery_prog_bg["a_position"] = self._battery_bg_vbo
+        self.battery_prog_fill["a_position"] = self._battery_fill_vbo
+
+        # Normalized placement (top-right corner)
+        self._battery_rect = dict(x=0.82, y=0.92, w=0.15, h=0.05)
 
         # Create GLOO program for signals
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
