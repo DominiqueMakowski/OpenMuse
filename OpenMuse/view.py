@@ -246,12 +246,33 @@ class RealtimeViewer:
             position=(100, 100),
         )
 
-               # -------- Detect optional Muse_BATTERY stream --------
+                # -------- Detect optional Muse_BATTERY stream --------
         self.battery_stream_idx = None
         for stream_idx, s in enumerate(streams):
             if "BATTERY" in s.name.upper():
                 self.battery_stream_idx = stream_idx
                 break
+
+        # -------- Battery viewer setup (as its own channel line) --------
+        if self.battery_stream_idx is not None:
+            bat_stream = streams[self.battery_stream_idx]
+            # Append battery as its own channel info
+            self.channel_info.append({
+                "stream_idx": self.battery_stream_idx,
+                "ch_idx": 0,  # Single value channel
+                "name": "Battery (%)",
+                "color": (1.0, 0.85, 0.2),  # yellow-gold
+                "y_range": 100.0,            # 0–100 %
+                "y_ticks": [0, 50, 100],
+                "y_scale": 1.0,
+                "y_mean": 50.0,
+            })
+            self.total_channels += 1
+
+            # Initialize battery data buffer
+            self.battery_history = deque(maxlen=180)
+            self.battery_level = 0.0
+
 
         # -------- Battery visualizer setup --------
         self.battery_history = deque(maxlen=180)
@@ -594,55 +615,6 @@ class RealtimeViewer:
             text_visual.pos = (x_pos, height - 25)
             text_visual.draw()
 
-            # -------- Battery overlay drawing --------
-        if self.battery_level is not None:
-            width, height = self.canvas.size
-            self.battery_text.pos = (width - 10, 10)
-            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
-
-            # Color-code based on level
-            if self.battery_level >= 60:
-                col = (0.2, 0.85, 0.2, 1.0)
-                self.battery_text.color = "lime"
-            elif self.battery_level >= 30:
-                col = (0.95, 0.75, 0.15, 1.0)
-                self.battery_text.color = "yellow"
-            else:
-                col = (0.9, 0.25, 0.2, 1.0)
-                self.battery_text.color = "red"
-
-            x = self._battery_rect["x"]
-            y = self._battery_rect["y"]
-            w = self._battery_rect["w"]
-            h = self._battery_rect["h"]
-
-            # Background bar
-            bg = np.array([
-                [x, y],
-                [x + w, y],
-                [x, y + h],
-                [x + w, y + h],
-            ], dtype=np.float32)
-            self._battery_bg_vbo.set_data(bg)
-            self.battery_prog_bg["u_color"] = (0.25, 0.25, 0.25, 1.0)
-            self.battery_prog_bg.draw("triangle_strip")
-
-            # Fill proportional to battery level
-            pad = 0.002
-            frac = self.battery_level / 100.0
-            w_fill = max(0.0, min(1.0, frac)) * (w - 2 * pad)
-            fill = np.array([
-                [x + pad, y + pad],
-                [x + pad + w_fill, y + pad],
-                [x + pad, y + h - pad],
-                [x + pad + w_fill, y + h - pad],
-            ], dtype=np.float32)
-            self._battery_fill_vbo.set_data(fill)
-            self.battery_prog_fill["u_color"] = col
-            self.battery_prog_fill.draw("triangle_strip")
-
-            self.battery_text.draw()
-
 
     def on_resize(self, event):
         """Handle window resize."""
@@ -956,7 +928,7 @@ class RealtimeViewer:
             channel_global_idx = self.channel_info.index(ch_info)
             self.data[:, channel_global_idx] = normalized_data
 
-                # -------- Battery stream update --------
+                # -------- Battery stream update (line viewer) --------
         if self.battery_stream_idx is not None:
             bat_stream = self.streams[self.battery_stream_idx]
             try:
@@ -966,8 +938,22 @@ class RealtimeViewer:
                     latest = max(0.0, min(100.0, latest))
                     self.battery_level = latest
                     self.battery_history.append(latest)
+
+                    # Smoothly interpolate battery trace to current display buffer length
+                    bat_ch_idx = next(
+                        i for i, ch in enumerate(self.channel_info)
+                        if ch["name"] == "Battery (%)"
+                    )
+                    y_mean = 50.0
+                    y_range = 100.0
+                    normalized = 2.0 * (np.array(self.battery_history) - y_mean) / y_range
+                    x_old = np.linspace(0, 1, len(normalized))
+                    x_new = np.linspace(0, 1, self.n_samples)
+                    normalized_interp = np.interp(x_new, x_old, normalized)
+                    self.data[:, bat_ch_idx] = normalized_interp
             except Exception:
                 pass
+
 
 
         # Update vertex positions
