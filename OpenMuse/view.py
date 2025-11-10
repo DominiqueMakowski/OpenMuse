@@ -192,6 +192,10 @@ class RealtimeViewer:
             is_eeg = "EEG" in stream_name.upper()
             is_optics = "OPTICS" in stream_name.upper()
 
+            if "BATTERY" in stream_name.upper():
+                self.battery_stream_idx = stream_idx  # Keep reference for battery updates
+                continue
+
             for ch_idx, ch_name in enumerate(stream.info.ch_names):
                 # Skip inactive channels (zero-padded)
                 if not self.active_channels[stream_idx][ch_idx]:
