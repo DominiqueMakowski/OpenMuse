@@ -579,16 +579,22 @@ class RealtimeViewer:
                 tick_text.draw()
 
             # Draw EEG standard deviation (impedance indicator) on the right side
+            # Draw EEG standard deviation (impedance indicator) next to the signal area
+            right_margin_fraction = 0.15  # Same as shader's x_margin_right
+            signal_end_x = width * (1.0 - right_margin_fraction)
+            right_column_x = signal_end_x + 40  # 40 px gap after the plotted region
+
             for eeg_ch_idx, std_text in self.eeg_std_labels:
                 if eeg_ch_idx == ch_idx:
-                    std_text.pos = (width - 10, y_center)
+                    std_text.pos = (right_column_x, y_center)
                     std_text.draw()
                     break
+
 
         # Draw time labels (x-axis)
         x_margin = 0.15  # Same as in shader (15% for labels and ticks)
         x_margin_left = 0.15
-        x_margin_right = 0.05
+        x_margin_right = 0.15
         signal_width = width * (1.0 - x_margin_left - x_margin_right)
         x_start = width * x_margin_left
 
