@@ -493,9 +493,7 @@ class RealtimeViewer:
             y_top = y_center + 0.35 * channel_height  # Upper y-limit
             y_bottom = y_center - 0.35 * channel_height  # Lower y-limit
 
-            right_margin = 0.85  # End of signal area (1.0 - 0.15 right blank)
-            y_limit_lines.extend([[0.15, y_top], [right_margin, y_top]])
-            y_limit_lines.extend([[0.15, y_bottom], [right_margin, y_bottom]])
+            right_margin = 1.0 - 0.08  # End of signal area (1.0 - 0.15 right blank)
 
 
         # Add zero lines for each channel (drawn separately with thicker line)
