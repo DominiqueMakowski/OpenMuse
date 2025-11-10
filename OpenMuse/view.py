@@ -46,7 +46,7 @@ void main() {
     
     // X position: Leave space on left for channel names and ticks
     float x_margin_left = 0.15;   // 15% left margin for labels/ticks
-    float x_margin_right = 0.15;  // 15% right margin (blank space)
+    float x_margin_right = 0.08;  // 15% right margin (blank space)
 
     float x = x_margin_left + (1.0 - x_margin_left - x_margin_right) * (sample_idx / u_n_samples);
 
