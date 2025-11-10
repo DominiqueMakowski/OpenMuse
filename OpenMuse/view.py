@@ -346,7 +346,7 @@ class RealtimeViewer:
                     "σ: ---",
                     pos=(0, 0),  # Will be positioned in on_draw
                     color="yellow",
-                    font_size=8,
+                    font_size=12,
                     anchor_x="right",
                     anchor_y="center",
                 )
