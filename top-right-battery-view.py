@@ -45,11 +45,8 @@ void main() {
     float sample_idx = a_index.y;
     
     // X position: Leave space on left for channel names and ticks
-    float x_margin_left = 0.15;   // 15% left margin for labels/ticks
-    float x_margin_right = 0.15;  // 15% right margin (blank space)
-
-    float x = x_margin_left + (1.0 - x_margin_left - x_margin_right) * (sample_idx / u_n_samples);
-
+    float x_margin = 0.15;  // 15% of width reserved for labels and ticks
+    float x = x_margin + (1.0 - x_margin) * (sample_idx / u_n_samples);
     
     // Y position: stack channels vertically with bottom margin for x-axis labels
     float y_bottom_margin = 0.03;  // 3% bottom margin for x-axis time labels
@@ -491,10 +488,8 @@ class RealtimeViewer:
             y_top = y_center + 0.35 * channel_height  # Upper y-limit
             y_bottom = y_center - 0.35 * channel_height  # Lower y-limit
 
-            right_margin = 0.85  # End of signal area (1.0 - 0.15 right blank)
-            y_limit_lines.extend([[0.15, y_top], [right_margin, y_top]])
-            y_limit_lines.extend([[0.15, y_bottom], [right_margin, y_bottom]])
-
+            y_limit_lines.extend([[0.15, y_top], [1.0, y_top]])
+            y_limit_lines.extend([[0.15, y_bottom], [1.0, y_bottom]])
 
         # Add zero lines for each channel (drawn separately with thicker line)
         self.zero_lines = []
@@ -503,7 +498,7 @@ class RealtimeViewer:
                 y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
             )
             y_center = y_offset + 0.5 * (y_usable_height / self.total_channels)
-            self.zero_lines.extend([[0.15, y_center], [right_margin, y_center]])
+            self.zero_lines.extend([[0.15, y_center], [1.0, y_center]])
 
         self.y_limit_lines = np.array(y_limit_lines, dtype=np.float32)
         self.zero_lines = np.array(self.zero_lines, dtype=np.float32)
@@ -587,11 +582,8 @@ class RealtimeViewer:
 
         # Draw time labels (x-axis)
         x_margin = 0.15  # Same as in shader (15% for labels and ticks)
-        x_margin_left = 0.15
-        x_margin_right = 0.15
-        signal_width = width * (1.0 - x_margin_left - x_margin_right)
-        x_start = width * x_margin_left
-
+        signal_width = width * (1.0 - x_margin)
+        x_start = width * x_margin
 
         for time_val, text_visual in self.time_labels:
             # Calculate x position (time_val is negative, from -window_size to 0)
