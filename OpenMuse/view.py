@@ -189,6 +189,11 @@ class RealtimeViewer:
 
         for stream_idx, stream in enumerate(streams):
             stream_name = stream.name
+            # Skip Muse_BATTERY stream entirely (we handle it separately)
+            if "BATTERY" in stream_name.upper():
+                self.battery_stream_idx = stream_idx  # still keep reference for updates
+                continue
+
             is_eeg = "EEG" in stream_name.upper()
             is_optics = "OPTICS" in stream_name.upper()
 
