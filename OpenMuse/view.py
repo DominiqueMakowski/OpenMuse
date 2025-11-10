@@ -261,7 +261,7 @@ class RealtimeViewer:
             "Battery: ---%",
             pos=(0, 0),
             color="yellow",
-            font_size=10,
+            font_size=12,
             anchor_x="right",
             anchor_y="top",
             bold=True,
