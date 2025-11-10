@@ -47,8 +47,8 @@ void main() {
     float sample_idx = a_index.y;
     
     // X position: Leave space on left for channel names and ticks
-    float x_margin_left = 0.05;   // 15% left margin for labels/ticks
-    float x_margin_right = 0.05;  // 15% right margin (blank space)
+    float x_margin_left = 0.07;   // 15% left margin for labels/ticks
+    float x_margin_right = 0.04;  // 15% right margin (blank space)
 
     float x = x_margin_left + (1.0 - x_margin_left - x_margin_right) * (sample_idx / u_n_samples);
 
@@ -191,10 +191,6 @@ class RealtimeViewer:
             stream_name = stream.name
             is_eeg = "EEG" in stream_name.upper()
             is_optics = "OPTICS" in stream_name.upper()
-
-            if "BATTERY" in stream_name.upper():
-                self.battery_stream_idx = stream_idx  # Keep reference for battery updates
-                continue
 
             for ch_idx, ch_name in enumerate(stream.info.ch_names):
                 # Skip inactive channels (zero-padded)
@@ -478,8 +474,8 @@ class RealtimeViewer:
         self.grid_program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
 
         # Margins must match shader
-        x_margin_left = 0.05
-        x_margin_right = 0.05
+        x_margin_left = 0.07
+        x_margin_right = 0.04
 
         # Vertical layout constants
         y_bottom_margin = 0.03
@@ -603,8 +599,8 @@ class RealtimeViewer:
 
         # Draw time labels (x-axis)
         x_margin = 0.15  # Same as in shader (15% for labels and ticks)
-        x_margin_left = 0.05
-        x_margin_right = 0.05
+        x_margin_left = 0.07
+        x_margin_right = 0.04
         signal_width = width * (1.0 - x_margin_left - x_margin_right)
         x_start = width * x_margin_left
 
