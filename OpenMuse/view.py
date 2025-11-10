@@ -456,7 +456,6 @@ class RealtimeViewer:
 
     def _create_grid_lines(self):
         """Create grid lines for horizontal separators and y-axis zero lines."""
-        # Simple shader for drawing lines
         grid_vert = """
         attribute vec2 a_position;
         uniform mat4 u_projection;
@@ -474,39 +473,46 @@ class RealtimeViewer:
         self.grid_program = gloo.Program(grid_vert, grid_frag)
         self.grid_program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
 
-        # Create horizontal grid lines at y-limits for each channel
-        # These correspond to where the min/max ticks are shown
-        # Signal uses 35% (0.35) of channel height on each side of center
-        # Account for bottom margin (3% reserved for x-axis labels)
+        # Margins must match shader
+        x_margin_left = 0.15
+        x_margin_right = 0.08
+
+        # Vertical layout constants
         y_bottom_margin = 0.03
         y_usable_height = 1.0 - y_bottom_margin
 
         y_limit_lines = []
         for ch_idx in range(self.total_channels):
-            y_offset = (
-                y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
-            )
+            y_offset = y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
             channel_height = y_usable_height / self.total_channels
             y_center = y_offset + 0.5 * channel_height
 
-            # Lines at ±35% from center (matching the 0.35 scale in shader)
-            y_top = y_center + 0.35 * channel_height  # Upper y-limit
-            y_bottom = y_center - 0.35 * channel_height  # Lower y-limit
+            # ±35% from center (same scaling as shader)
+            y_top = y_center + 0.35 * channel_height
+            y_bottom = y_center - 0.35 * channel_height
 
-            right_margin = 1.0 - 0.08  # End of signal area (1.0 - 0.15 right blank)
+            # Add top and bottom horizontal lines
+            y_limit_lines.extend([
+                [x_margin_left, y_top],
+                [1.0 - x_margin_right, y_top],
+                [x_margin_left, y_bottom],
+                [1.0 - x_margin_right, y_bottom],
+            ])
 
-
-        # Add zero lines for each channel (drawn separately with thicker line)
-        self.zero_lines = []
+        # Add zero lines (center lines)
+        zero_lines = []
         for ch_idx in range(self.total_channels):
-            y_offset = (
-                y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
-            )
+            y_offset = y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
             y_center = y_offset + 0.5 * (y_usable_height / self.total_channels)
-            self.zero_lines.extend([[0.15, y_center], [right_margin, y_center]])
+            zero_lines.extend([
+                [x_margin_left, y_center],
+                [1.0 - x_margin_right, y_center],
+            ])
 
+        # Store as numpy arrays
         self.y_limit_lines = np.array(y_limit_lines, dtype=np.float32)
-        self.zero_lines = np.array(self.zero_lines, dtype=np.float32)
+        self.zero_lines = np.array(zero_lines, dtype=np.float32)
+
 
     def on_draw(self, event):
         """Render the scene."""
