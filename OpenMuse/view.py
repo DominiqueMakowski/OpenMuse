@@ -588,7 +588,7 @@ class RealtimeViewer:
         # Draw time labels (x-axis)
         x_margin = 0.15  # Same as in shader (15% for labels and ticks)
         x_margin_left = 0.15
-        x_margin_right = 0.15
+        x_margin_right = 0.05
         signal_width = width * (1.0 - x_margin_left - x_margin_right)
         x_start = width * x_margin_left
 
