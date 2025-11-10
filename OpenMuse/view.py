@@ -297,7 +297,7 @@ class RealtimeViewer:
         self.battery_prog_fill["a_position"] = self._battery_fill_vbo
 
         # Normalized placement (top-right corner)
-        self._battery_rect = dict(x=0.80, y=0.94, w=0.10, h=0.04)
+        self._battery_rect = dict(x=0.80, y=0.96, w=0.08, h=0.03)
 
         # Create GLOO program for signals
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
@@ -597,7 +597,7 @@ class RealtimeViewer:
             # -------- Battery overlay drawing --------
         if self.battery_level is not None:
             width, height = self.canvas.size
-            self.battery_text.pos = (width - 10, 10)
+            self.battery_text.pos = (width - 10, 20)
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
             # Color-code based on level
