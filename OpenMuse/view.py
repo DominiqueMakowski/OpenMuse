@@ -591,15 +591,24 @@ class RealtimeViewer:
 
             # Draw EEG standard deviation (impedance indicator) on the right side
             # Draw EEG standard deviation (impedance indicator) next to the signal area
-            right_margin_fraction = 0.05  # Same as shader's x_margin_right
-            signal_end_x = width * (1.0 - right_margin_fraction)
-            right_column_x = signal_end_x + 70  # 40 px gap after the plotted region
+            # Right margin matches shader's x_margin_right
+            right_margin_fraction = 0.05
 
+            # Compute the signal region's right edge
+            signal_end_x = width * (1.0 - right_margin_fraction)
+
+            # Dynamic offset: scale with window width (proportional, not fixed pixels)
+            # About 4% of window width looks good visually
+            right_offset_fraction = 0.04
+            right_column_x = width * (1.0 - right_margin_fraction + right_offset_fraction)
+
+            # Draw EEG impedance (standard deviation) label
             for eeg_ch_idx, std_text in self.eeg_std_labels:
                 if eeg_ch_idx == ch_idx:
                     std_text.pos = (right_column_x, y_center)
                     std_text.draw()
                     break
+
 
 
         # Draw time labels (x-axis)
