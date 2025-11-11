@@ -248,12 +248,22 @@ class RealtimeViewer:
             window_title = f"OpenMuse - {self.total_channels} channels"
 
         # Create canvas
+        screen = app.use_app().backend_module.default_screen()
+        screen_w, screen_h = screen.size
         self.canvas = app.Canvas(
             title=window_title,
             keys="interactive",
-            size=(1400, 900),
-            position=(100, 100),
+            size=(int(screen_w * 0.8), int(screen_h * 0.8)),  # 80% of monitor
+            position=(50, 50),
         )
+
+
+        # --- Dynamic font scaling base ---
+        self._base_height = 900  # reference height
+        self._scale_factor = self.canvas.size[1] / self._base_height
+
+
+
 
                # -------- Detect optional Muse_BATTERY stream --------
         self.battery_stream_idx = None
@@ -270,7 +280,7 @@ class RealtimeViewer:
             "Battery: ---%",
             pos=(0, 0),
             color="yellow",
-            font_size=12,
+            font_size=int(12 * self._scale_factor),
             anchor_x="right",
             anchor_y="top",
             bold=True,
@@ -330,7 +340,7 @@ class RealtimeViewer:
                 ch_info["name"],
                 pos=(10, 0),  # Will be positioned in on_draw
                 color="white",
-                font_size=10,
+                font_size=int(10 * self._scale_factor),
                 anchor_x="right",  # Right-aligned at left edge
                 anchor_y="center",
                 bold=True,
@@ -350,7 +360,7 @@ class RealtimeViewer:
                     "σ: ---",
                     pos=(0, 0),  # Will be positioned in on_draw
                     color="yellow",
-                    font_size=12,
+                    font_size=int(12 * self._scale_factor),
                     anchor_x="right",
                     anchor_y="center",
                 )
@@ -384,7 +394,7 @@ class RealtimeViewer:
                 f"{time_val:.0f}s",
                 pos=(0, 0),  # Will be positioned in on_draw
                 color="white",
-                font_size=9,
+                font_size=int(9 * self._scale_factor),
                 anchor_x="center",
                 anchor_y="top",
             )
@@ -562,7 +572,9 @@ class RealtimeViewer:
 
             # Draw channel name at the left edge (right-aligned)
             # Increased space to accommodate longer names like "OPTICS_LO_NIR"
-            text_visual.pos = (120, y_center)
+            x_margin_fraction = 0.08  # 8% of width
+            text_visual.pos = (width * x_margin_fraction, y_center)
+
             text_visual.draw()
 
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
@@ -615,13 +627,13 @@ class RealtimeViewer:
             x_fraction = (time_val + self.window_size) / self.window_size
             x_pos = x_start + (x_fraction * signal_width)
             # Increased bottom margin to 25px to prevent overlap with bottom channel
-            text_visual.pos = (x_pos, height - 25)
+            text_visual.pos = (x_pos, height * 0.03)
             text_visual.draw()
 
             # -------- Battery overlay drawing --------
         if self.battery_level is not None:
             width, height = self.canvas.size
-            self.battery_text.pos = (width - 10, 20)
+            self.battery_text.pos = (width * 0.98, height * 0.03)
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
             # Color-code based on level
@@ -668,27 +680,38 @@ class RealtimeViewer:
             self.battery_text.draw()
 
 
-    def on_resize(self, event):
-        """Handle window resize."""
-        gloo.set_viewport(0, 0, *event.size)
+        def on_resize(self, event):
+        
+            gloo.set_viewport(0, 0, *event.size)
+        width, height = event.size
 
-        # Update text transforms
+        # Update scale factor relative to base design height (900)
+        self._scale_factor = height / self._base_height
+
+        # --- Update font sizes dynamically ---
         for text in self.channel_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+            text.font_size = int(10 * self._scale_factor)
         for _, text in self.eeg_std_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+            text.font_size = int(12 * self._scale_factor)
+        self.battery_text.font_size = int(12 * self._scale_factor)
+        for _, text in self.time_labels:
+            text.font_size = int(9 * self._scale_factor)
         for ch_ticks in self.y_tick_labels:
             for _, text in ch_ticks:
-                text.transforms.configure(
-                    canvas=self.canvas, viewport=(0, 0, *event.size)
-                )
-        for _, text in self.time_labels:
+                text.font_size = int(7 * self._scale_factor)
+
+        # Reconfigure transforms to match new viewport
+        for text in (
+            self.channel_labels
+            + [t for _, t in self.eeg_std_labels]
+            + [self.battery_text]
+            + [t for _, t in self.time_labels]
+            + [t for ch_ticks in self.y_tick_labels for _, t in ch_ticks]
+        ):
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
-                # Keep battery text aligned on resize
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *event.size)
-        )
+        self.canvas.update()
+
 
 
     def _update_time_labels(self):
@@ -704,7 +727,7 @@ class RealtimeViewer:
                 f"{time_val:.0f}s",
                 pos=(0, 0),  # Will be positioned in on_draw
                 color="white",
-                font_size=9,
+                font_size=int(9 * self._scale_factor),
                 anchor_x="center",
                 anchor_y="top",
             )
@@ -745,7 +768,7 @@ class RealtimeViewer:
                         tick_str,
                         pos=(0, 0),  # Will be positioned in on_draw
                         color="gray",
-                        font_size=7,
+                        font_size=int(7 * self._scale_factor),
                         anchor_x="right",
                         anchor_y="center",
                     )
