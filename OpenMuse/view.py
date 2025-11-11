@@ -689,9 +689,9 @@ class RealtimeViewer:
             self.battery_text.draw()
 
 
-        def on_resize(self, event):
+    def on_resize(self, event):
         
-            gloo.set_viewport(0, 0, *event.size)
+        gloo.set_viewport(0, 0, *event.size)
         width, height = event.size
 
         # Update scale factor relative to base design height (900)
