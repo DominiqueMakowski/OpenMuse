@@ -47,7 +47,7 @@ void main() {
     float sample_idx = a_index.y;
     
     // X position: Leave space on left for channel names and ticks
-    float x_margin_left = 0.09;   // 9% left margin for labels/ticks
+    float x_margin_left = 0.11;   // 11% left margin for labels/ticks
     float x_margin_right = 0.05;  // 5% right margin (blank space)
 
     float x = x_margin_left + (1.0 - x_margin_left - x_margin_right) * (sample_idx / u_n_samples);
@@ -479,7 +479,7 @@ class RealtimeViewer:
         self.grid_program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
 
         # Margins must match shader
-        x_margin_left = 0.09
+        x_margin_left = 0.11
         x_margin_right = 0.05
 
         # Vertical layout constants
@@ -575,7 +575,7 @@ class RealtimeViewer:
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
             # Position ticks to match shader positioning
             # Place at just before signal starts
-            tick_x = width * 0.085
+            tick_x = width * 0.105
             y_range = ch_info["y_range"]
             y_scale_zoom = ch_info["y_scale"]  # User's zoom level (from mouse wheel)
 
@@ -618,7 +618,7 @@ class RealtimeViewer:
 
 
         # Draw time labels (x-axis)
-        x_margin_left = 0.09
+        x_margin_left = 0.11
         x_margin_right = 0.05
         signal_width = width * (1.0 - x_margin_left - x_margin_right)
         x_start = width * x_margin_left
