@@ -138,14 +138,15 @@ from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 from .decode import (
     ACCGYRO_CHANNELS,
     BATTERY_CHANNELS,
+    # EEG_CHANNELS and OPTICS_CHANNELS removed - will be handled by parameters
     make_timestamps,
     parse_message,
 )
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
-# --- Channel Definitions (adapted from decode.py) ---
-# These lists are the *maximum* possible channels.
+# --- Local Channel Definitions ---
+# These lists are the *maximum* possible channels, used to build labels.
 _FULL_EEG_CHANNELS = (
     "EEG_TP9",
     "EEG_AF7",
@@ -177,14 +178,15 @@ _FULL_OPTICS_CHANNELS = (
 )
 
 # Map specific counts to the correct indices from the full list
+# This logic is derived from the context in decode.py
 _OPTICS_INDEXES = {
-    4: (4, 5, 6, 7),  # As defined in decode.py context
+    4: (4, 5, 6, 7),  # LI_NIR, RI_NIR, LI_IR, RI_IR
     8: tuple(range(8)),
     16: tuple(range(16)),
 }
 
 
-def select_eeg_channels(count: int) -> List[str]:
+def _select_eeg_channels(count: int) -> List[str]:
     """Select the correct EEG channel labels based on count."""
     if count not in (4, 8):
         warnings.warn(
@@ -197,7 +199,7 @@ def select_eeg_channels(count: int) -> List[str]:
     return [f"EEG_{i+1:02d}" for i in range(count)]  # Fallback
 
 
-def select_optics_channels(count: int) -> List[str]:
+def _select_optics_channels(count: int) -> List[str]:
     """Select the correct OPTICS channel labels based on count."""
     indices = _OPTICS_INDEXES.get(count)
     if indices is not None:
@@ -208,7 +210,7 @@ def select_optics_channels(count: int) -> List[str]:
         f"Unsupported OPTICS channel count: {count}. Must be 4, 8, or 16. "
         f"Defaulting to 16."
     )
-    indices = _OPTICS_INDEXES[16]
+    indices = _OPTICS_INDEXES.get(16)
     return [_FULL_OPTICS_CHANNELS[i] for i in indices]
 
 
@@ -220,11 +222,7 @@ class RLSFilter:
     """
     Implements a Recursive Least Squares (RLS) filter for online clock drift.
 
-    Models the linear relationship: y = X * theta
-    Where:
-      y = lsl_now
-      X = [device_time, 1.0]
-      theta = [b, a] (slope, intercept)
+    ( ... Omitted RLSFilter class for brevity ... )
     """
 
     def __init__(self, dim: int, lam: float, P_init: float):
@@ -302,7 +300,7 @@ def _create_lsl_outlets(
     streams = {}
 
     # --- EEG Stream ---
-    eeg_labels = select_eeg_channels(eeg_channels)
+    eeg_labels = _select_eeg_channels(eeg_channels)
     info_eeg = StreamInfo(
         name=f"Muse_EEG",
         stype="EEG",
@@ -339,7 +337,7 @@ def _create_lsl_outlets(
     streams["ACCGYRO"] = SensorStream(outlet=StreamOutlet(info_accgyro))
 
     # --- OPTICS Stream ---
-    optics_labels = select_optics_channels(optics_channels)
+    optics_labels = _select_optics_channels(optics_channels)
     info_optics = StreamInfo(
         name=f"Muse_OPTICS",
         stype="PPG",
@@ -431,6 +429,23 @@ async def _stream_async(
         # Extract device timestamps (relative to t=0 from make_timestamps)
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
+        
+        # --- Validate Channel Count ---
+        # This is the crucial check: data columns must match outlet definition
+        expected_channels = stream.outlet.get_info().n_channels
+        actual_channels = samples.shape[1]
+
+        if actual_channels != expected_channels:
+            if verbose:
+                print(
+                    f"Warning: Channel mismatch for {sensor_type}! "
+                    f"LSL Outlet expects {expected_channels} channels, "
+                    f"but data has {actual_channels} channels. "
+                    "This packet will be DROPPED. "
+                    "Ensure 'eeg_channels' and 'optics_channels' "
+                    "arguments match your device preset."
+                )
+            return # Drop packet
 
         # --- Drift Correction ---
         # Get the last device time from the chunk.
@@ -518,6 +533,11 @@ async def _stream_async(
             except Exception as e:
                 if verbose:
                     print(f"Error pushing LSL chunk for {sensor_type}: {e}")
+                    print(
+                        f"    Data shape: {sorted_data.shape}, "
+                        f"Outlet channels: {stream.outlet.get_info().n_channels}"
+                    )
+
 
     def _on_data(_, data: bytearray):
         """Main data callback from Bleak."""
