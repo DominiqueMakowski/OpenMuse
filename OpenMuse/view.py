@@ -566,11 +566,13 @@ class RealtimeViewer:
             # Left margin fraction (must match shader’s x_margin_left)
             x_margin_left = 0.09
 
-            # Place the channel label a bit before the tick marks (so it scales with window width)
-            label_x_fraction = x_margin_left - 0.03   # about 3% of width before signals
+            # compute position fractionally, but keep it at least 20 px inside the view
+            label_x_fraction = max(20.0 / width, x_margin_left - 0.03)
             label_x = width * label_x_fraction
 
             text_visual.pos = (label_x, y_center)
+            text_visual.draw()  # <— don’t forget to draw each label
+
 
 
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
