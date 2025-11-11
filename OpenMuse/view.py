@@ -47,8 +47,8 @@ void main() {
     float sample_idx = a_index.y;
     
     // X position: Leave space on left for channel names and ticks
-    float x_margin_left = 0.09;   // 15% left margin for labels/ticks
-    float x_margin_right = 0.045;  // 15% right margin (blank space)
+    float x_margin_left = 0.10;   // 15% left margin for labels/ticks
+    float x_margin_right = 0.05;  // 15% right margin (blank space)
 
     float x = x_margin_left + (1.0 - x_margin_left - x_margin_right) * (sample_idx / u_n_samples);
 
@@ -479,8 +479,8 @@ class RealtimeViewer:
         self.grid_program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
 
         # Margins must match shader
-        x_margin_left = 0.09
-        x_margin_right = 0.045
+        x_margin_left = 0.10
+        x_margin_right = 0.05
 
         # Vertical layout constants
         y_bottom_margin = 0.03
@@ -569,7 +569,7 @@ class RealtimeViewer:
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
             # Position ticks to match shader positioning
             # Place at just before signal starts
-            tick_x = width * 0.085
+            tick_x = width * 0.095
             y_range = ch_info["y_range"]
             y_scale_zoom = ch_info["y_scale"]  # User's zoom level (from mouse wheel)
 
@@ -591,7 +591,7 @@ class RealtimeViewer:
 
             # Draw EEG standard deviation (impedance indicator) on the right side
             # Draw EEG standard deviation (impedance indicator) next to the signal area
-            right_margin_fraction = 0.045  # Same as shader's x_margin_right
+            right_margin_fraction = 0.05  # Same as shader's x_margin_right
             signal_end_x = width * (1.0 - right_margin_fraction)
             right_column_x = signal_end_x + 70  # 40 px gap after the plotted region
 
@@ -603,9 +603,8 @@ class RealtimeViewer:
 
 
         # Draw time labels (x-axis)
-        x_margin = 0.15  # Same as in shader (15% for labels and ticks)
-        x_margin_left = 0.09
-        x_margin_right = 0.045
+        x_margin_left = 0.10
+        x_margin_right = 0.05
         signal_width = width * (1.0 - x_margin_left - x_margin_right)
         x_start = width * x_margin_left
 
