@@ -563,8 +563,15 @@ class RealtimeViewer:
 
             # Draw channel name at the left edge (right-aligned)
             # Increased space to accommodate longer names like "OPTICS_LO_NIR"
-            text_visual.pos = (95, y_center)
-            text_visual.draw()
+            # Left margin fraction (must match shader’s x_margin_left)
+            x_margin_left = 0.09
+
+            # Place the channel label a bit before the tick marks (so it scales with window width)
+            label_x_fraction = x_margin_left - 0.03   # about 3% of width before signals
+            label_x = width * label_x_fraction
+
+            text_visual.pos = (label_x, y_center)
+
 
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
             # Position ticks to match shader positioning
