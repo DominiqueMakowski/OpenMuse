@@ -567,7 +567,7 @@ class RealtimeViewer:
             x_margin_left = 0.09
 
             # compute position fractionally, but keep it at least 20 px inside the view
-            label_x_fraction = max(20.0 / width, x_margin_left - 0.03)
+            label_x_fraction = min(x_margin_left - 0.02, max(20.0 / width, x_margin_left - 0.03))
             label_x = width * label_x_fraction
 
             text_visual.pos = (label_x, y_center)
