@@ -247,15 +247,24 @@ class RealtimeViewer:
         else:
             window_title = f"OpenMuse - {self.total_channels} channels"
 
-        # Create canvas
-        screen = app.use_app().backend_module.default_screen()
-        screen_w, screen_h = screen.size
+        # --- Create canvas with dynamic size based on current screen ---
+        try:
+            from PyQt5 import QtWidgets
+            app_qt = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+            screen = app_qt.primaryScreen()
+            screen_geom = screen.availableGeometry()
+            screen_w, screen_h = screen_geom.width(), screen_geom.height()
+        except Exception:
+            # Fallback if no PyQt5 or headless environment
+            screen_w, screen_h = 1400, 900
+
         self.canvas = app.Canvas(
             title=window_title,
             keys="interactive",
-            size=(int(screen_w * 0.8), int(screen_h * 0.8)),  # 80% of monitor
+            size=(int(screen_w * 0.8), int(screen_h * 0.8)),
             position=(50, 50),
         )
+
 
 
         # --- Dynamic font scaling base ---
