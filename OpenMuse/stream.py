@@ -429,10 +429,10 @@ async def _stream_async(
         # Extract device timestamps (relative to t=0 from make_timestamps)
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
-        
+
         # --- Validate Channel Count ---
         # This is the crucial check: data columns must match outlet definition
-        expected_channels = stream.outlet.get_info().n_channels
+        expected_channels = stream.outlet.get_sinfo().n_channels
         actual_channels = samples.shape[1]
 
         if actual_channels != expected_channels:
@@ -445,7 +445,7 @@ async def _stream_async(
                     "Ensure 'eeg_channels' and 'optics_channels' "
                     "arguments match your device preset."
                 )
-            return # Drop packet
+            return  # Drop packet
 
         # --- Drift Correction ---
         # Get the last device time from the chunk.
@@ -535,9 +535,8 @@ async def _stream_async(
                     print(f"Error pushing LSL chunk for {sensor_type}: {e}")
                     print(
                         f"    Data shape: {sorted_data.shape}, "
-                        f"Outlet channels: {stream.outlet.get_info().n_channels}"
+                        f"Outlet channels: {stream.outlet.get_sinfo().n_channels}"
                     )
-
 
     def _on_data(_, data: bytearray):
         """Main data callback from Bleak."""
