@@ -640,7 +640,7 @@ class RealtimeViewer:
             w = self._battery_rect["w"]
             h = self._battery_rect["h"]
 
-            # Background bar
+            # Rotate battery bar 90° left (vertical orientation)
             bg = np.array([
                 [x, y],
                 [x + w, y],
@@ -648,18 +648,16 @@ class RealtimeViewer:
                 [x + w, y + h],
             ], dtype=np.float32)
             self._battery_bg_vbo.set_data(bg)
-            self.battery_prog_bg["u_color"] = (0.25, 0.25, 0.25, 1.0)
-            self.battery_prog_bg.draw("triangle_strip")
 
-            # Fill proportional to battery level
+            # Vertical fill proportional to battery level
             pad = 0.002
             frac = self.battery_level / 100.0
-            w_fill = max(0.0, min(1.0, frac)) * (w - 2 * pad)
+            h_fill = max(0.0, min(1.0, frac)) * (h - 2 * pad)
             fill = np.array([
                 [x + pad, y + pad],
-                [x + pad + w_fill, y + pad],
-                [x + pad, y + h - pad],
-                [x + pad + w_fill, y + h - pad],
+                [x + w - pad, y + pad],
+                [x + pad, y + pad + h_fill],
+                [x + w - pad, y + pad + h_fill],
             ], dtype=np.float32)
             self._battery_fill_vbo.set_data(fill)
             self.battery_prog_fill["u_color"] = col
