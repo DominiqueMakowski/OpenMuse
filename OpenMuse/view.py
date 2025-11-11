@@ -564,13 +564,7 @@ class RealtimeViewer:
             # Draw channel name at the left edge (right-aligned)
             # Increased space to accommodate longer names like "OPTICS_LO_NIR"
             # Left margin fraction (must match shader’s x_margin_left)
-            x_margin_left = 0.09
-
-            # Increase label spacing to avoid clipping long names
-            extra_label_gap_fraction = 0.045  # was 0.03
-
-            # Compute scaled, but clamped label position (so it never leaves screen)
-            label_x_fraction = max(40.0 / width, x_margin_left - extra_label_gap_fraction)
+            label_x_fraction = 0.075  # 7.5% of width — scales smoothly
             label_x = width * label_x_fraction
 
             text_visual.pos = (label_x, y_center)
