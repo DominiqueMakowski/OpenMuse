@@ -323,6 +323,12 @@ class RealtimeViewer:
         self.program["u_n_samples"] = float(self.n_samples)
         self.program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
 
+        # NEW: set initial aspect-based x-scale so the first frame is correct
+        w, h = self.canvas.size
+        aspect = max(w / float(h), 1e-6)
+        self.program["u_scale"] = (1.0 / aspect, 1.0)
+
+
         # Create text labels for channel names (y-axis, left side, right-aligned)
         self.channel_labels = []
         for ch_idx, ch_info in enumerate(self.channel_info):
