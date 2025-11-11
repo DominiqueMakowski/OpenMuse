@@ -622,7 +622,7 @@ class RealtimeViewer:
         if self.battery_level is not None:
             width, height = self.canvas.size
             self.battery_text.pos = (width - 10, 20)
-            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
+            self.battery_text.text = f"{self.battery_level:.0f}%"
 
             # Color-code based on level
             if self.battery_level >= 60:
