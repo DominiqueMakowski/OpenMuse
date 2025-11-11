@@ -563,13 +563,13 @@ class RealtimeViewer:
 
             # Draw channel name at the left edge (right-aligned)
             # Increased space to accommodate longer names like "OPTICS_LO_NIR"
-            text_visual.pos = (120, y_center)
+            text_visual.pos = (95, y_center)
             text_visual.draw()
 
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
             # Position ticks to match shader positioning
             # Place at just before signal starts
-            tick_x = width * 0.095
+            tick_x = width * 0.11
             y_range = ch_info["y_range"]
             y_scale_zoom = ch_info["y_scale"]  # User's zoom level (from mouse wheel)
 
@@ -621,7 +621,7 @@ class RealtimeViewer:
             # -------- Battery overlay drawing --------
         if self.battery_level is not None:
             width, height = self.canvas.size
-            self.battery_text.pos = (width - 10, 20)
+            self.battery_text.pos = (width - 10, 15)
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
             # Color-code based on level
@@ -675,7 +675,7 @@ class RealtimeViewer:
         scale_y = height / base_height
 
         # Use height scaling for font size (better for wide displays)
-        font_scale = max(0.5, min(2.5, scale_y))
+        font_scale = max(0.5, min(2.5, scale_y))  # TWEAK FONT SIZE PROPORTIONALLY
 
         # --- Scale text ---
         base_sizes = {
