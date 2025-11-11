@@ -270,7 +270,7 @@ class RealtimeViewer:
             "---%",
             pos=(0, 0),
             color="yellow",
-            font_size=8,
+            font_size=7,
             anchor_x="right",
             anchor_y="top",
             bold=True,
@@ -330,7 +330,7 @@ class RealtimeViewer:
                 ch_info["name"],
                 pos=(10, 0),  # Will be positioned in on_draw
                 color="white",
-                font_size=10,
+                font_size=8,
                 anchor_x="right",  # Right-aligned at left edge
                 anchor_y="center",
                 bold=True,
@@ -350,7 +350,7 @@ class RealtimeViewer:
                     "σ: ---",
                     pos=(0, 0),  # Will be positioned in on_draw
                     color="yellow",
-                    font_size=10,
+                    font_size=8,
                     anchor_x="right",
                     anchor_y="center",
                 )
@@ -384,7 +384,7 @@ class RealtimeViewer:
                 f"{time_val:.0f}s",
                 pos=(0, 0),  # Will be positioned in on_draw
                 color="white",
-                font_size=9,
+                font_size=7,
                 anchor_x="center",
                 anchor_y="top",
             )
@@ -395,7 +395,7 @@ class RealtimeViewer:
 
         # Initialize y-tick labels
         self._update_y_tick_labels(create_new=True)
-        self._update_text_scaling(*self.canvas.size)
+        self._apply_dynamic_scaling(*self.canvas.size)
 
         # Connect events
         self.canvas.events.draw.connect(self.on_draw)  # type: ignore[attr-defined]
@@ -668,35 +668,45 @@ class RealtimeViewer:
 
             self.battery_text.draw()
 
-    def _update_text_scaling(self, width: int, height: int):
-        """Scale all text sizes dynamically with window size."""
-        # Define a base reference height — the size where text looks 'normal'
-        base_height = 900.0
-        scale_factor = height / base_height
+    def _apply_dynamic_scaling(self, width: int, height: int):
+        """Dynamically scale text and battery bar based on window size."""
+        # --- Base reference window for normalization ---
+        base_width, base_height = 1400.0, 900.0
+        scale_x = width / base_width
+        scale_y = height / base_height
 
-        # Clamp scale factor to a reasonable range
-        scale_factor = max(0.5, min(2.5, scale_factor))
+        # Use height scaling for font size (better for wide displays)
+        font_scale = max(0.5, min(2.5, scale_y))
 
-        # Base font sizes used originally
+        # --- Scale text ---
         base_sizes = {
-            "channel": 10,
-            "eeg_std": 10,
-            "time": 9,
+            "channel": 8,
+            "eeg_std": 8,
+            "time": 7,
             "tick": 6,
-            "battery": 8,
+            "battery": 7,
         }
 
-        # Apply scaled font sizes
         for text in self.channel_labels:
-            text.font_size = base_sizes["channel"] * scale_factor
+            text.font_size = base_sizes["channel"] * font_scale
         for _, text in self.eeg_std_labels:
-            text.font_size = base_sizes["eeg_std"] * scale_factor
+            text.font_size = base_sizes["eeg_std"] * font_scale
         for _, text in self.time_labels:
-            text.font_size = base_sizes["time"] * scale_factor
+            text.font_size = base_sizes["time"] * font_scale
         for ch_ticks in self.y_tick_labels:
             for _, text in ch_ticks:
-                text.font_size = base_sizes["tick"] * scale_factor
-        self.battery_text.font_size = base_sizes["battery"] * scale_factor
+                text.font_size = base_sizes["tick"] * font_scale
+        self.battery_text.font_size = base_sizes["battery"] * font_scale
+
+        # --- Scale battery bar proportionally ---
+        base_rect = dict(x=0.9625, y=0.96, w=0.03, h=0.02)
+        self._battery_rect = dict(
+            x=base_rect["x"],
+            y=base_rect["y"],
+            w=base_rect["w"] * scale_x,
+            h=base_rect["h"] * scale_y,
+        )
+
 
 
 
@@ -723,7 +733,7 @@ class RealtimeViewer:
         )
 
         # Dynamically scale all text based on window size
-        self._update_text_scaling(*event.size)
+        self._apply_dynamic_scaling(*event.size)
 
 
     def _update_time_labels(self):
@@ -739,7 +749,7 @@ class RealtimeViewer:
                 f"{time_val:.0f}s",
                 pos=(0, 0),  # Will be positioned in on_draw
                 color="white",
-                font_size=9,
+                font_size=8,
                 anchor_x="center",
                 anchor_y="top",
             )
