@@ -146,6 +146,28 @@ The channel count for EEG and OPTICS is now determined dynamically by the first
 incoming data packet from the Muse device.
 """
 
+"""
+Muse BLE to LSL Streaming
+==========================
+
+( ... Omitted docstring for brevity ... )
+"""
+
+"""
+Muse BLE to LSL Streaming
+==========================
+
+LSL Stream Configuration:
+-------------------------
+Four LSL streams are created:
+- Muse_EEG
+- Muse_ACCGYRO
+- Muse_OPTICS
+- Muse_BATTERY
+The channel count for EEG and OPTICS is now determined dynamically by the first
+incoming data packet from the Muse device.
+"""
+
 import asyncio
 import time
 import warnings
@@ -306,9 +328,8 @@ def _create_lsl_outlets_initial(
     device_id: str,
 ) -> Dict[str, SensorStream]:
     """
-    Initialize sensor stream objects without creating LSL outlets yet.
-
-    The actual StreamOutlet objects will be created on the first data packet.
+    Initialize sensor stream objects, creating fixed LSL outlets immediately
+    and placeholders for dynamic ones.
     """
     streams = {}
 
@@ -316,13 +337,15 @@ def _create_lsl_outlets_initial(
     streams["EEG"] = SensorStream()
     streams["OPTICS"] = SensorStream()
 
-    # Initialize streams where channel count is fixed (ACCGYRO, BATTERY)
-    # ACCGYRO Stream (Fixed 6 channels, 52 Hz)
+    # --- ACCGYRO Stream (Fixed 6 channels, 52 Hz) ---
+    sensor_type = "ACCGYRO"
+    n_channels = len(ACCGYRO_CHANNELS)
+    sfreq = 52.0
     info_accgyro = StreamInfo(
-        name=f"Muse_ACCGYRO",
+        name=f"Muse_{sensor_type}",
         stype="ACC_GYRO",
-        n_channels=len(ACCGYRO_CHANNELS),
-        sfreq=52.0,
+        n_channels=n_channels,
+        sfreq=sfreq,
         dtype="float32",
         source_id=f"{device_id}_accgyro",
     )
@@ -333,14 +356,21 @@ def _create_lsl_outlets_initial(
     channels_accgyro = desc_accgyro.append_child("channels")
     for ch_name in ACCGYRO_CHANNELS:
         channels_accgyro.append_child("channel").append_child_value("label", ch_name)
-    streams["ACCGYRO"] = SensorStream(outlet=StreamOutlet(info_accgyro))
 
-    # Battery Stream (Fixed 1 channel, 1 Hz)
+    outlet_accgyro = StreamOutlet(info_accgyro)
+    streams[sensor_type] = SensorStream(outlet=outlet_accgyro)
+    # Removed: print(f"✅ LSL Outlet created for {sensor_type}: {n_channels} channels at {sfreq} Hz.")
+
+
+    # --- Battery Stream (Fixed 1 channel, 1 Hz) ---
+    sensor_type = "BATTERY"
+    n_channels = len(BATTERY_CHANNELS)
+    sfreq = 1.0
     info_battery = StreamInfo(
-        name=f"Muse_BATTERY",
+        name=f"Muse_{sensor_type}",
         stype="Battery",
-        n_channels=len(BATTERY_CHANNELS),
-        sfreq=1.0,
+        n_channels=n_channels,
+        sfreq=sfreq,
         dtype="float32",
         source_id=f"{device_id}_battery",
     )
@@ -351,12 +381,15 @@ def _create_lsl_outlets_initial(
     channels_battery = desc_battery.append_child("channels")
     for ch_name in BATTERY_CHANNELS:
         channels_battery.append_child("channel").append_child_value("label", ch_name)
-    streams["BATTERY"] = SensorStream(outlet=StreamOutlet(info_battery))
+
+    outlet_battery = StreamOutlet(info_battery)
+    streams[sensor_type] = SensorStream(outlet=outlet_battery)
+    # Removed: print(f"✅ LSL Outlet created for {sensor_type}: {n_channels} channel at {sfreq} Hz.")
 
     return streams
 
 
-def _create_dynamic_outlet(stream: SensorStream, sensor_type: str, device_name: str, device_id: str, n_channels: int):
+def _create_dynamic_outlet(stream: SensorStream, sensor_type: str, device_name: str, device_id: str, n_channels: int, verbose: bool):
     """Creates the LSL StreamOutlet for a sensor type whose channel count is now known."""
 
     if sensor_type == "EEG":
@@ -368,7 +401,6 @@ def _create_dynamic_outlet(stream: SensorStream, sensor_type: str, device_name: 
         stype = "PPG"
         sfreq = 64.0
     else:
-        # Should not happen for dynamic streams, but as a safeguard
         raise ValueError(f"Cannot dynamically create outlet for unknown type: {sensor_type}")
 
     info = StreamInfo(
@@ -389,7 +421,7 @@ def _create_dynamic_outlet(stream: SensorStream, sensor_type: str, device_name: 
         channels.append_child("channel").append_child_value("label", ch_name)
 
     stream.outlet = StreamOutlet(info)
-    print(f"✅ LSL Outlet created for {sensor_type}: {n_channels} channels at {sfreq} Hz.")
+    # Removed: if verbose: print(f"✅ LSL Outlet created for {sensor_type}: {n_channels} channels at {sfreq} Hz.")
 
 
 async def _stream_async(
@@ -412,42 +444,37 @@ async def _stream_async(
     def _queue_samples(sensor_type: str, data_array: np.ndarray, lsl_now: float):
         """
         Apply drift correction, dynamically create outlet if needed, and buffer samples.
-
-        Parameters
-        ----------
-        sensor_type : str
-            The name of the sensor (e.g., "EEG").
-        data_array : np.ndarray
-            The array from make_timestamps, shape (n_samples, 1 + n_channels).
-            Column 0 is device_time, remaining are sensor values.
-        lsl_now : float
-            The computer's LSL clock time when the BLE message was received.
         """
         if data_array.size == 0:
             return
 
         stream = streams.get(sensor_type)
         if stream is None:
-            return  # Should not happen
+            return
 
-        # Extract device timestamps and samples
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
         actual_channels = samples.shape[1]
 
-        # --- Dynamic Outlet Creation (The Fix) ---
+        # --- Dynamic Outlet Creation (Only for EEG and OPTICS) ---
         if stream.outlet is None:
-            # This only happens for EEG and OPTICS on the first packet.
-            try:
-                _create_dynamic_outlet(
-                    stream, sensor_type, device_name, device_id, actual_channels
-                )
-            except Exception as e:
-                if verbose:
-                    print(f"❌ Failed to create LSL Outlet for {sensor_type}: {e}")
-                return # Drop packet, cannot proceed without outlet
+            # Check if this is one of the streams that needs dynamic creation
+            if sensor_type in ["EEG", "OPTICS"]:
+                try:
+                    # Note: verbose is passed here, but the print statement inside
+                    # _create_dynamic_outlet has been removed.
+                    _create_dynamic_outlet(
+                        stream, sensor_type, device_name, device_id, actual_channels, verbose
+                    )
+                except Exception as e:
+                    if verbose:
+                        # Retain non-emoji failure message
+                        print(f"❌ Failed to create LSL Outlet for {sensor_type}: {e}")
+                    return
+            else:
+                return
 
-        # --- Validation (for fixed streams or after dynamic creation) ---
+        # --- Validation ---
         expected_channels = stream.outlet.get_sinfo().n_channels
 
         if actual_channels != expected_channels:
@@ -460,7 +487,7 @@ async def _stream_async(
                     "This packet will be DROPPED. "
                     "The number of channels likely changed mid-stream."
                 )
-            return  # Drop packet
+            return
 
         # --- Drift Correction ---
         drift_filter = stream.drift_filter
@@ -470,7 +497,6 @@ async def _stream_async(
         last_device_time = device_times[-1]
 
         if not drift_initialized:
-            # Initialize this sensor's filter
             initial_a = lsl_now - last_device_time
             drift_filter.theta = np.array([1.0, initial_a])
             stream.drift_initialized = True
@@ -598,8 +624,7 @@ async def _stream_async(
             client, preset, data_callbacks, verbose=verbose
         )
 
-        if verbose:
-            print("Streaming data... (LSL Outlets for EEG/OPTICS will be created on first data packet.)")
+        # Removed: print("Streaming data... (LSL Outlets for EEG/OPTICS will be created on first data packet.)")
 
         # --- Main streaming loop ---
         while True:
