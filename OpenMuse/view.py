@@ -566,8 +566,11 @@ class RealtimeViewer:
             # Left margin fraction (must match shader’s x_margin_left)
             x_margin_left = 0.09
 
-            # compute position fractionally, but keep it at least 20 px inside the view
-            label_x_fraction = min(x_margin_left - 0.02, max(20.0 / width, x_margin_left - 0.03))
+            # Increase label spacing to avoid clipping long names
+            extra_label_gap_fraction = 0.045  # was 0.03
+
+            # Compute scaled, but clamped label position (so it never leaves screen)
+            label_x_fraction = max(40.0 / width, x_margin_left - extra_label_gap_fraction)
             label_x = width * label_x_fraction
 
             text_visual.pos = (label_x, y_center)
