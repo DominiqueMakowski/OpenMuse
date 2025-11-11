@@ -189,61 +189,44 @@ from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
 # --- Local Channel Definitions ---
-# These lists are used for naming channels once the count is known.
+# --- Local Channel Definitions ---
+# Full possible channel sets — used for naming once the actual count is detected.
 _FULL_EEG_CHANNELS = (
-    "EEG_TP9",
-    "EEG_AF7",
-    "EEG_AF8",
-    "EEG_TP10",
-    "AUX_1",
-    "AUX_2",
-    "AUX_3",
-    "AUX_4",
+    "EEG_TP9", "EEG_AF7", "EEG_AF8", "EEG_TP10",
+    "AUX_1", "AUX_2", "AUX_3", "AUX_4",
 )
 
 _FULL_OPTICS_CHANNELS = (
-    "OPTICS_LO_NIR",
-    "OPTICS_RO_NIR",
-    "OPTICS_LO_IR",
-    "OPTICS_RO_IR",
-    "OPTICS_LI_NIR",
-    "OPTICS_RI_NIR",
-    "OPTICS_LI_IR",
-    "OPTICS_RI_IR",
-    "OPTICS_LO_RED",
-    "OPTICS_RO_RED",
-    "OPTICS_LO_AMB",
-    "OPTICS_RO_AMB",
-    "OPTICS_LI_RED",
-    "OPTICS_RI_RED",
-    "OPTICS_LI_AMB",
-    "OPTICS_RI_AMB",
+    "OPTICS_LO_NIR", "OPTICS_RO_NIR", "OPTICS_LO_IR", "OPTICS_RO_IR",
+    "OPTICS_LI_NIR", "OPTICS_RI_NIR", "OPTICS_LI_IR", "OPTICS_RI_IR",
+    "OPTICS_LO_RED", "OPTICS_RO_RED", "OPTICS_LO_AMB", "OPTICS_RO_AMB",
+    "OPTICS_LI_RED", "OPTICS_RI_RED", "OPTICS_LI_AMB", "OPTICS_RI_AMB",
 )
 
-# Map specific counts to the correct indices from the full list
+# Subset indices for known device layouts
 _OPTICS_INDEXES = {
-    4: (4, 5, 6, 7),
-    8: tuple(range(8)),
-    16: tuple(range(16)),
+    4: (4, 5, 6, 7),      # inner NIR/IR subset
+    8: tuple(range(8)),    # NIR/IR only
+    16: tuple(range(16)),  # full layout
 }
 
 
 def _select_eeg_channels(count: int) -> List[str]:
-    """Select the correct EEG channel labels based on the actual count."""
-    if count in (4, 8) and count <= len(_FULL_EEG_CHANNELS):
+    """Return EEG channel names dynamically based on detected count."""
+    if count <= len(_FULL_EEG_CHANNELS):
         return list(_FULL_EEG_CHANNELS[:count])
-    # Generic fallback for any other count
+    # Fallback for unknown layouts
     return [f"EEG_{i+1:02d}" for i in range(count)]
 
 
 def _select_optics_channels(count: int) -> List[str]:
-    """Select the correct OPTICS channel labels based on the actual count."""
-    indices = _OPTICS_INDEXES.get(count)
-    if indices is not None:
-        return [_FULL_OPTICS_CHANNELS[i] for i in indices]
-
-    # Generic fallback for any other count
+    """Return OPTICS channel names dynamically based on detected count."""
+    idx = _OPTICS_INDEXES.get(count)
+    if idx is not None:
+        return [_FULL_OPTICS_CHANNELS[i] for i in idx]
+    # Fallback for unknown layouts
     return [f"OPTICS_{i+1:02d}" for i in range(count)]
+
 
 
 MAX_BUFFER_PACKETS = 52  # 52 packets per sensor
@@ -389,19 +372,20 @@ def _create_lsl_outlets_initial(
     return streams
 
 
-def _create_dynamic_outlet(stream: SensorStream, sensor_type: str, device_name: str, device_id: str, n_channels: int, verbose: bool):
-    """Creates the LSL StreamOutlet for a sensor type whose channel count is now known."""
-
+def _create_dynamic_outlet(stream: SensorStream, sensor_type: str,
+                           device_name: str, device_id: str,
+                           n_channels: int, verbose: bool):
+    """
+    Create or recreate an LSL outlet once the actual channel count is known.
+    """
     if sensor_type == "EEG":
         labels = _select_eeg_channels(n_channels)
-        stype = "EEG"
-        sfreq = 256.0
+        stype, sfreq = "EEG", 256.0
     elif sensor_type == "OPTICS":
         labels = _select_optics_channels(n_channels)
-        stype = "PPG"
-        sfreq = 64.0
+        stype, sfreq = "PPG", 64.0
     else:
-        raise ValueError(f"Cannot dynamically create outlet for unknown type: {sensor_type}")
+        raise ValueError(f"Dynamic outlet creation not supported for {sensor_type}")
 
     info = StreamInfo(
         name=f"Muse_{sensor_type}",
@@ -417,11 +401,14 @@ def _create_dynamic_outlet(stream: SensorStream, sensor_type: str, device_name: 
     desc.append_child_value("model", "MuseS")
     desc.append_child_value("device", device_name)
     channels = desc.append_child("channels")
-    for ch_name in labels:
-        channels.append_child("channel").append_child_value("label", ch_name)
+    for ch in labels:
+        channels.append_child("channel").append_child_value("label", ch)
 
+    # Replace the existing outlet if necessary
     stream.outlet = StreamOutlet(info)
-    # Removed: if verbose: print(f"✅ LSL Outlet created for {sensor_type}: {n_channels} channels at {sfreq} Hz.")
+    if verbose:
+        print(f"✅ Created dynamic outlet for {sensor_type}: {n_channels} channels at {sfreq} Hz")
+
 
 
 async def _stream_async(
