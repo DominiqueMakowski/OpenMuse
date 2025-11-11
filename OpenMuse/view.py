@@ -640,7 +640,7 @@ class RealtimeViewer:
             w = self._battery_rect["w"]
             h = self._battery_rect["h"]
 
-            # Rotate battery bar 90° left (vertical orientation)
+            # Background bar
             bg = np.array([
                 [x, y],
                 [x + w, y],
@@ -648,16 +648,18 @@ class RealtimeViewer:
                 [x + w, y + h],
             ], dtype=np.float32)
             self._battery_bg_vbo.set_data(bg)
+            self.battery_prog_bg["u_color"] = (0.25, 0.25, 0.25, 1.0)
+            self.battery_prog_bg.draw("triangle_strip")
 
-            # Vertical fill proportional to battery level
+            # Fill proportional to battery level
             pad = 0.002
             frac = self.battery_level / 100.0
-            h_fill = max(0.0, min(1.0, frac)) * (h - 2 * pad)
+            w_fill = max(0.0, min(1.0, frac)) * (w - 2 * pad)
             fill = np.array([
                 [x + pad, y + pad],
-                [x + w - pad, y + pad],
-                [x + pad, y + pad + h_fill],
-                [x + w - pad, y + pad + h_fill],
+                [x + pad + w_fill, y + pad],
+                [x + pad, y + h - pad],
+                [x + pad + w_fill, y + h - pad],
             ], dtype=np.float32)
             self._battery_fill_vbo.set_data(fill)
             self.battery_prog_fill["u_color"] = col
@@ -667,44 +669,26 @@ class RealtimeViewer:
 
 
     def on_resize(self, event):
-        """Handle window resize consistently across DPI/resolutions."""
-        width, height = event.size
+        """Handle window resize."""
+        gloo.set_viewport(0, 0, *event.size)
 
-        # Query the device pixel ratio (important for HiDPI / Retina)
-        try:
-            dpi_scale = self.canvas.context.get_dpi_ratio()
-        except Exception:
-            dpi_scale = 1.0
+        # Update text transforms
+        for text in self.channel_labels:
+            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+        for _, text in self.eeg_std_labels:
+            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+        for ch_ticks in self.y_tick_labels:
+            for _, text in ch_ticks:
+                text.transforms.configure(
+                    canvas=self.canvas, viewport=(0, 0, *event.size)
+                )
+        for _, text in self.time_labels:
+            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
-        # Compute actual framebuffer size
-        fb_width = int(width * dpi_scale)
-        fb_height = int(height * dpi_scale)
-
-        # Set viewport to full framebuffer (NOT logical window size)
-        gloo.set_viewport(0, 0, fb_width, fb_height)
-
-        # Keep normalized coordinate system stable (no aspect scaling)
-        projection = ortho(0, 1, 0, 1, -1, 1)
-        self.program["u_projection"] = projection
-        self.grid_program["u_projection"] = projection
-        self.battery_prog_bg["u_projection"] = projection
-        self.battery_prog_fill["u_projection"] = projection
-
-        # Keep uniform scale = (1,1) — do NOT apply aspect ratio here
-        self.program["u_scale"] = (1.0, 1.0)
-
-        # Update all text transforms to use new viewport
-        all_texts = (
-            list(self.channel_labels)
-            + [t for _, t in self.eeg_std_labels]
-            + [t for _, t in self.time_labels]
-            + [t for ch_ticks in self.y_tick_labels for _, t in ch_ticks]
-            + [self.battery_text]
+                # Keep battery text aligned on resize
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *event.size)
         )
-
-        for text in all_texts:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, width, height))
-
 
 
     def _update_time_labels(self):
