@@ -668,7 +668,7 @@ class RealtimeViewer:
             self.battery_text.draw()
 
 
-        def on_resize(self, event):
+    def on_resize(self, event):
             """Handle window resize while preserving proportions."""
             width, height = event.size
 
