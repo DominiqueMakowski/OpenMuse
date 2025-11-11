@@ -668,50 +668,45 @@ class RealtimeViewer:
             self.battery_text.draw()
 
 
-    def on_resize(self, event):
-        """Handle window resize and maintain aspect ratio."""
-        width, height = event.size
+        def on_resize(self, event):
+            """Handle window resize while preserving proportions."""
+            width, height = event.size
 
-        # Set the OpenGL viewport
-        gloo.set_viewport(0, 0, width, height)
+            # Set OpenGL viewport
+            gloo.set_viewport(0, 0, width, height)
 
-        # ---- Maintain visual proportions regardless of display aspect ratio ----
-        aspect = width / float(height)
+            # --- Keep the same normalized coordinate space ---
+            # The projection stays fixed so your layout logic (0–1 coords) doesn’t break
+            projection = ortho(0, 1, 0, 1, -1, 1)
 
-        if aspect >= 1.0:
-            # Wider window → expand x-range
-            projection = ortho(0, aspect, 0, 1, -1, 1)
-        else:
-            # Taller window → expand y-range
-            inv_aspect = 1.0 / aspect
-            projection = ortho(0, 1, 0, inv_aspect, -1, 1)
+            self.program["u_projection"] = projection
+            self.grid_program["u_projection"] = projection
+            self.battery_prog_bg["u_projection"] = projection
+            self.battery_prog_fill["u_projection"] = projection
 
-        # Update projection uniforms for all drawing programs
-        self.program["u_projection"] = projection
-        self.grid_program["u_projection"] = projection
-        self.battery_prog_bg["u_projection"] = projection
-        self.battery_prog_fill["u_projection"] = projection
+            # --- Adjust horizontal scale to match aspect ratio ---
+            aspect = width / float(height)
+            # Keep x scaling inverse to aspect so shapes don’t stretch horizontally
+            self.program["u_scale"] = (1.0 / aspect, 1.0)
 
-        # ---- Keep all text visuals properly aligned to new viewport ----
-        all_texts = []
+            # --- Reconfigure text transforms for new viewport ---
+            for text_group in (
+                self.channel_labels,
+                [t for _, t in self.eeg_std_labels],
+                [t for _, t in self.time_labels],
+                [t for ch_ticks in self.y_tick_labels for _, t in ch_ticks],
+                [self.battery_text],
+            ):
+                for text in text_group:
+                    text.transforms.configure(canvas=self.canvas, viewport=(0, 0, width, height))
 
-        all_texts.extend(self.channel_labels)
-        all_texts.extend(t for _, t in self.eeg_std_labels)
-        all_texts.extend(t for _, t in self.time_labels)
-        for ch_ticks in self.y_tick_labels:
-            all_texts.extend(t for _, t in ch_ticks)
-        all_texts.append(self.battery_text)
+            # Optional: handle HiDPI (Retina, 4K, etc.)
+            try:
+                dpi_scale = self.canvas.context.get_dpi_ratio()
+                gloo.set_viewport(0, 0, int(width * dpi_scale), int(height * dpi_scale))
+            except Exception:
+                pass
 
-        for text in all_texts:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, width, height))
-
-        # Optionally handle HiDPI scaling (for Retina / 4K displays)
-        try:
-            dpi_scale = self.canvas.context.get_dpi_ratio()
-            gloo.set_viewport(0, 0, int(width * dpi_scale), int(height * dpi_scale))
-        except Exception:
-            # Some backends may not support get_dpi_ratio
-            pass
 
 
     def _update_time_labels(self):
