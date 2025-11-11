@@ -138,13 +138,79 @@ from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 from .decode import (
     ACCGYRO_CHANNELS,
     BATTERY_CHANNELS,
-    EEG_CHANNELS,
-    OPTICS_CHANNELS,
     make_timestamps,
     parse_message,
 )
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
+
+# --- Channel Definitions (adapted from decode.py) ---
+# These lists are the *maximum* possible channels.
+_FULL_EEG_CHANNELS = (
+    "EEG_TP9",
+    "EEG_AF7",
+    "EEG_AF8",
+    "EEG_TP10",
+    "AUX_1",
+    "AUX_2",
+    "AUX_3",
+    "AUX_4",
+)
+
+_FULL_OPTICS_CHANNELS = (
+    "OPTICS_LO_NIR",
+    "OPTICS_RO_NIR",
+    "OPTICS_LO_IR",
+    "OPTICS_RO_IR",
+    "OPTICS_LI_NIR",
+    "OPTICS_RI_NIR",
+    "OPTICS_LI_IR",
+    "OPTICS_RI_IR",
+    "OPTICS_LO_RED",
+    "OPTICS_RO_RED",
+    "OPTICS_LO_AMB",
+    "OPTICS_RO_AMB",
+    "OPTICS_LI_RED",
+    "OPTICS_RI_RED",
+    "OPTICS_LI_AMB",
+    "OPTICS_RI_AMB",
+)
+
+# Map specific counts to the correct indices from the full list
+_OPTICS_INDEXES = {
+    4: (4, 5, 6, 7),  # As defined in decode.py context
+    8: tuple(range(8)),
+    16: tuple(range(16)),
+}
+
+
+def select_eeg_channels(count: int) -> List[str]:
+    """Select the correct EEG channel labels based on count."""
+    if count not in (4, 8):
+        warnings.warn(
+            f"Unsupported EEG channel count: {count}. Must be 4 or 8. "
+            f"Defaulting to 8."
+        )
+        count = 8
+    if count <= len(_FULL_EEG_CHANNELS):
+        return list(_FULL_EEG_CHANNELS[:count])
+    return [f"EEG_{i+1:02d}" for i in range(count)]  # Fallback
+
+
+def select_optics_channels(count: int) -> List[str]:
+    """Select the correct OPTICS channel labels based on count."""
+    indices = _OPTICS_INDEXES.get(count)
+    if indices is not None:
+        return [_FULL_OPTICS_CHANNELS[i] for i in indices]
+
+    # Fallback/Warning if count is not 4, 8, or 16
+    warnings.warn(
+        f"Unsupported OPTICS channel count: {count}. Must be 4, 8, or 16. "
+        f"Defaulting to 16."
+    )
+    indices = _OPTICS_INDEXES[16]
+    return [_FULL_OPTICS_CHANNELS[i] for i in indices]
+
 
 MAX_BUFFER_PACKETS = 52  # 52 packets per sensor
 FLUSH_INTERVAL = 0.2  # 200ms
@@ -226,15 +292,21 @@ class SensorStream:
     last_update_device_time: float = 0.0
 
 
-def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStream]:
+def _create_lsl_outlets(
+    device_name: str,
+    device_id: str,
+    eeg_channels: int,
+    optics_channels: int,
+) -> Dict[str, SensorStream]:
     """Create all LSL outlets for the available sensor streams."""
     streams = {}
 
     # --- EEG Stream ---
+    eeg_labels = select_eeg_channels(eeg_channels)
     info_eeg = StreamInfo(
         name=f"Muse_EEG",
         stype="EEG",
-        n_channels=len(EEG_CHANNELS),
+        n_channels=len(eeg_labels),
         sfreq=256.0,
         dtype="float32",
         source_id=f"{device_id}_eeg",
@@ -244,7 +316,7 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
     desc_eeg.append_child_value("model", "MuseS")
     desc_eeg.append_child_value("device", device_name)
     channels = desc_eeg.append_child("channels")
-    for ch_name in EEG_CHANNELS:
+    for ch_name in eeg_labels:
         channels.append_child("channel").append_child_value("label", ch_name)
     streams["EEG"] = SensorStream(outlet=StreamOutlet(info_eeg))
 
@@ -267,10 +339,11 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
     streams["ACCGYRO"] = SensorStream(outlet=StreamOutlet(info_accgyro))
 
     # --- OPTICS Stream ---
+    optics_labels = select_optics_channels(optics_channels)
     info_optics = StreamInfo(
         name=f"Muse_OPTICS",
         stype="PPG",
-        n_channels=len(OPTICS_CHANNELS),
+        n_channels=len(optics_labels),
         sfreq=64.0,
         dtype="float32",
         source_id=f"{device_id}_optics",
@@ -280,7 +353,7 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
     desc_optics.append_child_value("model", "MuseS")
     desc_optics.append_child_value("device", device_name)
     channels_optics = desc_optics.append_child("channels")
-    for ch_name in OPTICS_CHANNELS:
+    for ch_name in optics_labels:
         channels_optics.append_child("channel").append_child_value("label", ch_name)
     streams["OPTICS"] = SensorStream(outlet=StreamOutlet(info_optics))
 
@@ -311,6 +384,8 @@ async def _stream_async(
     duration: Optional[float] = None,
     raw_data_file: Optional[str] = None,
     verbose: bool = True,
+    eeg_channels: int = 8,
+    optics_channels: int = 16,
 ):
     """Asynchronous context for BLE connection and LSL streaming."""
 
@@ -375,9 +450,9 @@ async def _stream_async(
 
             # Only update filter if this packet is 'newer'
             # This prevents out-of-order packets from corrupting the model
-            if last_device_time  > last_update_device_time:
+            if last_device_time > last_update_device_time:
                 # Update the filter with the new (device_time, lsl_now) pair
-                drift_filter.update(y=lsl_now, x=np.array([last_device_time , 1.0]))
+                drift_filter.update(y=lsl_now, x=np.array([last_device_time, 1.0]))
                 stream.last_update_device_time = last_device_time
 
             # Get current model parameters [b, a]
@@ -385,14 +460,14 @@ async def _stream_async(
 
             # Safety check: If filter diverges, reset it
             if not (0.5 < drift_b < 1.5):
-                time_diff = last_device_time  - prev_device_time
+                time_diff = last_device_time - prev_device_time
                 if (
                     verbose and (lsl_now - start_time) > 5.0
                 ):  # Suppress early warnings during warmup
                     print(
                         f"Warning: Unstable drift fit for {sensor_type}. Resetting filter. "
                         f"[Slope(b)={drift_b:.4f}, TimeDiff={time_diff:.3f}s, "
-                        f"NewDevTime={last_device_time :.3f}, LastDevTime={prev_device_time:.3f}]"
+                        f"NewDevTime={last_device_time:.3f}, LastDevTime={prev_device_time:.3f}]"
                     )
                 # Reset and re-initialize
                 drift_filter.reset()
@@ -510,7 +585,9 @@ async def _stream_async(
             print(f"Connected. Device: {client.name}")
 
         # Create LSL outlets
-        streams = _create_lsl_outlets(client.name, address)
+        streams = _create_lsl_outlets(
+            client.name, address, eeg_channels, optics_channels
+        )
         start_time = time.monotonic()
 
         # Subscribe to data and configure device
@@ -554,14 +631,16 @@ def stream(
     duration: Optional[float] = None,
     record: Union[bool, str] = False,
     verbose: bool = True,
+    eeg_channels: int = 8,
+    optics_channels: int = 16,
 ) -> None:
     """
     Stream decoded EEG and accelerometer/gyroscope data over LSL.
 
     Creates four LSL streams:
-    - Muse_EEG: 8 channels at 256 Hz (EEG + AUX)
+    - Muse_EEG: (4 or 8) channels at 256 Hz (EEG + AUX)
     - Muse_ACCGYRO: 6 channels at 52 Hz (accelerometer + gyroscope)
-    - Muse_OPTICS: 16 channels at 64 Hz (PPG sensors)
+    - Muse_OPTICS: (4, 8, or 16) channels at 64 Hz (PPG sensors)
     - Muse_BATTERY: 1 channel at 1 Hz (battery percentage)
 
     Parameters
@@ -579,6 +658,12 @@ def stream(
         If a string is provided, use it as the filename.
     verbose : bool
         If True (default), print connection and status messages.
+    eeg_channels : int, optional
+        The number of EEG channels to stream (4 or 8). Default is 8.
+        This MUST match the device's configuration (preset).
+    optics_channels : int, optional
+        The number of OPTICS (PPG) channels to stream (4, 8, or 16).
+        Default is 16. This MUST match the device's configuration (preset).
     """
     # Configure MNE-LSL
     configure_lsl_api_cfg()
@@ -602,7 +687,17 @@ def stream(
 
     # --- Run the main asynchronous streaming loop ---
     try:
-        asyncio.run(_stream_async(address, preset, duration, raw_data_file, verbose))
+        asyncio.run(
+            _stream_async(
+                address,
+                preset,
+                duration,
+                raw_data_file,
+                verbose,
+                eeg_channels,
+                optics_channels,
+            )
+        )
     except KeyboardInterrupt:
         if verbose:
             print("Streaming stopped by user.")
