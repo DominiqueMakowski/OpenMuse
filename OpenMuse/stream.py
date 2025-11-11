@@ -406,8 +406,6 @@ def _create_dynamic_outlet(stream: SensorStream, sensor_type: str,
 
     # Replace the existing outlet if necessary
     stream.outlet = StreamOutlet(info)
-    if verbose:
-        print(f"✅ Created dynamic outlet for {sensor_type}: {n_channels} channels at {sfreq} Hz")
 
 
 
