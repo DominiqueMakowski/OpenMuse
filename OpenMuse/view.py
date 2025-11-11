@@ -267,7 +267,7 @@ class RealtimeViewer:
         self.battery_level = None  # 0–100%
 
         self.battery_text = TextVisual(
-            "Battery: ---%",
+            "---%",
             pos=(0, 0),
             color="yellow",
             font_size=8,
