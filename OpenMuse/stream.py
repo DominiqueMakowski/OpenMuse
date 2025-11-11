@@ -477,17 +477,27 @@ async def _stream_async(
         # --- Validation ---
         expected_channels = stream.outlet.get_sinfo().n_channels
 
+        # Allow EEG (4 or 8) and OPTICS (4, 8, or 16) to adapt dynamically
         if actual_channels != expected_channels:
-            # This is the old warning, kept as a safety check if the device changes modes
-            if verbose:
-                print(
-                    f"Warning: Channel mismatch for {sensor_type}! "
-                    f"LSL Outlet expects {expected_channels} channels, "
-                    f"but data has {actual_channels} channels. "
-                    "This packet will be DROPPED. "
-                    "The number of channels likely changed mid-stream."
+            if sensor_type in ["EEG", "OPTICS"]:
+                if verbose:
+                    print(
+                        f"⚙️ Detected change in {sensor_type} channel count: "
+                        f"{expected_channels} → {actual_channels}. Recreating outlet..."
+                    )
+                # Recreate the outlet dynamically with the new count
+                _create_dynamic_outlet(
+                    stream, sensor_type, device_name, device_id, actual_channels, verbose
                 )
-            return
+                expected_channels = actual_channels
+            else:
+                if verbose:
+                    print(
+                        f"Warning: Channel mismatch for {sensor_type}! "
+                        f"Expected {expected_channels}, got {actual_channels}. Dropping packet."
+                    )
+                return
+
 
         # --- Drift Correction ---
         drift_filter = stream.drift_filter
