@@ -569,7 +569,7 @@ class RealtimeViewer:
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
             # Position ticks to match shader positioning
             # Place at just before signal starts
-            tick_x = width * 0.11
+            tick_x = width * 0.095
             y_range = ch_info["y_range"]
             y_scale_zoom = ch_info["y_scale"]  # User's zoom level (from mouse wheel)
 
