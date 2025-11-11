@@ -395,6 +395,7 @@ class RealtimeViewer:
 
         # Initialize y-tick labels
         self._update_y_tick_labels(create_new=True)
+        self._update_text_scaling(*self.canvas.size)
 
         # Connect events
         self.canvas.events.draw.connect(self.on_draw)  # type: ignore[attr-defined]
@@ -622,7 +623,7 @@ class RealtimeViewer:
         if self.battery_level is not None:
             width, height = self.canvas.size
             self.battery_text.pos = (width - 10, 20)
-            self.battery_text.text = f"{self.battery_level:.0f}%"
+            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
             # Color-code based on level
             if self.battery_level >= 60:
@@ -667,6 +668,37 @@ class RealtimeViewer:
 
             self.battery_text.draw()
 
+    def _update_text_scaling(self, width: int, height: int):
+        """Scale all text sizes dynamically with window size."""
+        # Define a base reference height — the size where text looks 'normal'
+        base_height = 900.0
+        scale_factor = height / base_height
+
+        # Clamp scale factor to a reasonable range
+        scale_factor = max(0.5, min(2.5, scale_factor))
+
+        # Base font sizes used originally
+        base_sizes = {
+            "channel": 10,
+            "eeg_std": 10,
+            "time": 9,
+            "tick": 6,
+            "battery": 8,
+        }
+
+        # Apply scaled font sizes
+        for text in self.channel_labels:
+            text.font_size = base_sizes["channel"] * scale_factor
+        for _, text in self.eeg_std_labels:
+            text.font_size = base_sizes["eeg_std"] * scale_factor
+        for _, text in self.time_labels:
+            text.font_size = base_sizes["time"] * scale_factor
+        for ch_ticks in self.y_tick_labels:
+            for _, text in ch_ticks:
+                text.font_size = base_sizes["tick"] * scale_factor
+        self.battery_text.font_size = base_sizes["battery"] * scale_factor
+
+
 
     def on_resize(self, event):
         """Handle window resize."""
@@ -685,10 +717,13 @@ class RealtimeViewer:
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
-                # Keep battery text aligned on resize
+        # Keep battery text aligned on resize
         self.battery_text.transforms.configure(
             canvas=self.canvas, viewport=(0, 0, *event.size)
         )
+
+        # Dynamically scale all text based on window size
+        self._update_text_scaling(*event.size)
 
 
     def _update_time_labels(self):
