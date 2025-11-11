@@ -669,26 +669,49 @@ class RealtimeViewer:
 
 
     def on_resize(self, event):
-        """Handle window resize."""
-        gloo.set_viewport(0, 0, *event.size)
+        """Handle window resize and maintain aspect ratio."""
+        width, height = event.size
 
-        # Update text transforms
-        for text in self.channel_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
-        for _, text in self.eeg_std_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+        # Set the OpenGL viewport
+        gloo.set_viewport(0, 0, width, height)
+
+        # ---- Maintain visual proportions regardless of display aspect ratio ----
+        aspect = width / float(height)
+
+        if aspect >= 1.0:
+            # Wider window → expand x-range
+            projection = ortho(0, aspect, 0, 1, -1, 1)
+        else:
+            # Taller window → expand y-range
+            inv_aspect = 1.0 / aspect
+            projection = ortho(0, 1, 0, inv_aspect, -1, 1)
+
+        # Update projection uniforms for all drawing programs
+        self.program["u_projection"] = projection
+        self.grid_program["u_projection"] = projection
+        self.battery_prog_bg["u_projection"] = projection
+        self.battery_prog_fill["u_projection"] = projection
+
+        # ---- Keep all text visuals properly aligned to new viewport ----
+        all_texts = []
+
+        all_texts.extend(self.channel_labels)
+        all_texts.extend(t for _, t in self.eeg_std_labels)
+        all_texts.extend(t for _, t in self.time_labels)
         for ch_ticks in self.y_tick_labels:
-            for _, text in ch_ticks:
-                text.transforms.configure(
-                    canvas=self.canvas, viewport=(0, 0, *event.size)
-                )
-        for _, text in self.time_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+            all_texts.extend(t for _, t in ch_ticks)
+        all_texts.append(self.battery_text)
 
-                # Keep battery text aligned on resize
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *event.size)
-        )
+        for text in all_texts:
+            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, width, height))
+
+        # Optionally handle HiDPI scaling (for Retina / 4K displays)
+        try:
+            dpi_scale = self.canvas.context.get_dpi_ratio()
+            gloo.set_viewport(0, 0, int(width * dpi_scale), int(height * dpi_scale))
+        except Exception:
+            # Some backends may not support get_dpi_ratio
+            pass
 
 
     def _update_time_labels(self):
