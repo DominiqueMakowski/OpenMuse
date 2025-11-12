@@ -641,10 +641,9 @@ class RealtimeViewer:
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
         bar = self._battery_rect_px
-        bx = bar["x"] + bar["w"] / 2
-        by = bar["y"] - (0.02 * height)   # place text slightly above bar if bar is at top
+        bx = width * 0.97     # near right edge
+        by = height * 0.97    # near top (97% up the window)
         self.battery_text.pos = (bx, by)
-
 
         # Update color + label depending on level
         if self.battery_level is None:
