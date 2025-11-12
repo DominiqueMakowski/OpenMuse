@@ -272,7 +272,7 @@ class RealtimeViewer:
             color="yellow",
             font_size=7,
             anchor_x="center",
-            anchor_y="top",
+            anchor_y="bottom",
             bold=True,
         )
         self.battery_text.transforms.configure(
@@ -656,7 +656,7 @@ class RealtimeViewer:
 
             self.battery_text.pos = (
                 x + w / 2,
-                y + h + (0.01 * height),  # just above the top of the bar
+                height - (0.02 * height),  # position text near top of screen
             )
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
@@ -717,10 +717,10 @@ class RealtimeViewer:
         # --- Battery bar in pixel coordinates ---
         bar_width = 0.03 * width
         bar_height = 0.02 * height
-        x = width - bar_width - 0.03 * width   # ~3% right margin
-        y = height - bar_height - 0.03 * height  # ~3% top margin
-
+        x = width - bar_width - 0.03 * width   # right margin
+        y = height - bar_height - 0.05 * height  # top margin (~5%)
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
+
 
         # Update projection to pixel space
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
