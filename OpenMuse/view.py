@@ -654,7 +654,10 @@ class RealtimeViewer:
             w = self._battery_rect_px["w"]
             h = self._battery_rect_px["h"]
 
-            self.battery_text.pos = (x + w / 2, y + h + 10)
+            self.battery_text.pos = (
+                x + w / 2,
+                y + h + 0.02 * height,  # 2% of window height above the bar
+            )
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
 
@@ -715,7 +718,7 @@ class RealtimeViewer:
         bar_width = 0.03 * width
         bar_height = 0.02 * height
         x = width - bar_width - 0.02 * width   # ~2% right margin
-        y = height - bar_height - 0.02 * height  # ~2% top margin
+        y = height - bar_height - 0.03 * height  # ~2% top margin
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
