@@ -275,10 +275,9 @@ class RealtimeViewer:
             anchor_y="bottom",
             bold=True,
         )
-
-        from vispy.visuals.transforms import STTransform
-        self.battery_text.transform = STTransform()  # ✅ use pixel coordinates
-
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+        )
 
         # Battery bar shaders
         BAT_VERT = """
@@ -654,12 +653,11 @@ class RealtimeViewer:
             y = self._battery_rect_px["y"]
             w = self._battery_rect_px["w"]
             h = self._battery_rect_px["h"]
-
+            
             self.battery_text.pos = (
                 x + w / 2,
-                min(height - 10, y + h + 0.015 * height),
+                min(0.99, y + h + 0.02),  # just above the bar, stay within [0–1]
             )
-
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
 
@@ -716,17 +714,16 @@ class RealtimeViewer:
                 text.font_size = base_sizes["tick"] * font_scale
         self.battery_text.font_size = base_sizes["battery"] * font_scale
 
-        # --- Battery bar in pixel coordinates ---
-        bar_width = 0.03 * width
-        bar_height = 0.02 * height
-        x = width - bar_width - 0.03 * width   # right margin
-        y = height - bar_height - 0.05 * height  # top margin (~5%)
+        # --- Battery bar in normalized coordinates (0–1) ---
+        bar_width = 0.03
+        bar_height = 0.02
+        x = 0.97 - bar_width   # right margin ≈ 3%
+        y = 0.97 - bar_height  # top margin ≈ 3%
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
 
-        # Update projection to pixel space
-        self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
-        self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
+        self.battery_prog_bg["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+        self.battery_prog_fill["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
 
 
 
@@ -746,6 +743,11 @@ class RealtimeViewer:
                 )
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+
+        # Keep battery text aligned on resize
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *event.size)
+        )
 
         # Dynamically scale all text based on window size
         self._apply_dynamic_scaling(*event.size)
