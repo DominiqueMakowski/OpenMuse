@@ -650,7 +650,7 @@ class RealtimeViewer:
         if self.battery_level is None:
             # show placeholder even before data arrives
             self.battery_text.color = "yellow"
-            self.battery_text.text = "Battery: ---%"
+            self.battery_text.text = "BATT: ---%"
         else:
             if self.battery_level >= 60:
                 col = (0.2, 0.85, 0.2, 1.0)
@@ -661,7 +661,7 @@ class RealtimeViewer:
             else:
                 col = (0.9, 0.25, 0.2, 1.0)
                 self.battery_text.color = "red"
-            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
+            self.battery_text.text = f"BATT: {self.battery_level:.0f}%"
 
         # Draw the text (always)
         self.battery_text.draw()
