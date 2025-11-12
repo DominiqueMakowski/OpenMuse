@@ -784,7 +784,7 @@ class RealtimeViewer:
                 color="white",
                 font_size=8,
                 anchor_x="center",
-                anchor_y="bottom",
+                anchor_y="top",
             )
             text.transforms.configure(
                 canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
