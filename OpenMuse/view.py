@@ -735,7 +735,7 @@ class RealtimeViewer:
         bar_width = 0.035 * width
         bar_height = 0.022 * height
         x = width - bar_width - 0.0075 * width
-        y = height * 0.03 - bar_height  # ~3% below top edge
+        y = height * 0.10 - bar_height  # ~3% below top edge
 
         # Store battery bar rect
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
