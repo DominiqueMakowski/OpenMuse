@@ -275,7 +275,9 @@ class RealtimeViewer:
             anchor_y="bottom",
             bold=True,
         )
-        self.battery_text.canvas = self.canvas
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+        )
 
         # Battery bar shaders
         BAT_VERT = """
@@ -630,11 +632,11 @@ class RealtimeViewer:
             text_visual.pos = (x_pos, height - 25)
             text_visual.draw()
 
-            # -------- Battery overlay drawing --------
+        # -------- Battery overlay drawing --------
         if self.battery_level is not None:
             width, height = self.canvas.size
 
-            # Color-code based on level
+            # --- Color based on charge level ---
             if self.battery_level >= 60:
                 col = (0.2, 0.85, 0.2, 1.0)
                 self.battery_text.color = "lime"
@@ -649,15 +651,15 @@ class RealtimeViewer:
             y = self._battery_rect_px["y"]
             w = self._battery_rect_px["w"]
             h = self._battery_rect_px["h"]
-            
+
+            # --- Battery percentage text just above the bar ---
             self.battery_text.pos = (
                 x + w / 2,
-                y + h + 15,  # 15 px above the bar
+                y + h + 15,  # 15 px above bar
             )
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
-
-            # Background bar
+            # --- Background bar ---
             bg = np.array([
                 [x, y],
                 [x + w, y],
@@ -668,10 +670,10 @@ class RealtimeViewer:
             self.battery_prog_bg["u_color"] = (0.25, 0.25, 0.25, 1.0)
             self.battery_prog_bg.draw("triangle_strip")
 
-            # Fill proportional to battery level
-            pad = 4  # pixel padding
-            frac = self.battery_level / 100.0
-            w_fill = max(0.0, min(1.0, frac)) * (w - 2 * pad)
+            # --- Fill proportional to battery level ---
+            pad = 4  # pixel padding inside bar
+            frac = max(0.0, min(1.0, self.battery_level / 100.0))
+            w_fill = frac * (w - 2 * pad)
             fill = np.array([
                 [x + pad, y + pad],
                 [x + pad + w_fill, y + pad],
@@ -682,7 +684,10 @@ class RealtimeViewer:
             self.battery_prog_fill["u_color"] = col
             self.battery_prog_fill.draw("triangle_strip")
 
+            # --- Finally draw the text ---
             self.battery_text.draw()
+
+
 
     def _apply_dynamic_scaling(self, width: int, height: int):
         """Dynamically scale text and battery bar based on window size."""
@@ -691,7 +696,7 @@ class RealtimeViewer:
         scale_y = height / base_height
         font_scale = max(0.5, min(2.5, scale_y))
 
-        # --- Scale text ---
+        # --- Scale all text labels proportionally ---
         base_sizes = {
             "channel": 8,
             "eeg_std": 8,
@@ -710,14 +715,16 @@ class RealtimeViewer:
                 text.font_size = base_sizes["tick"] * font_scale
         self.battery_text.font_size = base_sizes["battery"] * font_scale
 
-        # --- Battery bar in PIXEL coordinates ---
+        # --- Battery bar in pixel coordinates (top-right corner) ---
         bar_width = 0.03 * width
         bar_height = 0.02 * height
         x = width - bar_width - 0.03 * width    # right margin (~3%)
         y = height - bar_height - 0.05 * height  # top margin (~5%)
+
+        # Store position for later use in on_draw()
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-        # Projection must match pixel space
+        # Projection must match pixel space for proper rendering
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
         self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
 
