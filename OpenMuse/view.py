@@ -267,12 +267,12 @@ class RealtimeViewer:
         self.battery_level = None  # 0–100%
 
         self.battery_text = TextVisual(
-            "---%",
+            "Battery: ---%",
             pos=(0, 0),
             color="yellow",
             font_size=7,
-            anchor_x="right",
-            anchor_y="top",
+            anchor_x="center",
+            anchor_y="bottom",
             bold=True,
         )
         self.battery_text.transforms.configure(
@@ -656,7 +656,7 @@ class RealtimeViewer:
 
             self.battery_text.pos = (
                 x + w / 2,
-                y + h + 0.02 * height,  # 2% of window height above the bar
+                y + h + 0.04 * height,  # 2% of window height above the bar
             )
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
@@ -718,7 +718,7 @@ class RealtimeViewer:
         bar_width = 0.03 * width
         bar_height = 0.02 * height
         x = width - bar_width - 0.03 * width   # ~3% right margin
-        y = height - bar_height - 0.03 * height  # ~3% top margin
+        y = height - bar_height - 0.04 * height  # ~3% top margin
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
