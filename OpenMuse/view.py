@@ -565,7 +565,7 @@ class RealtimeViewer:
             # Increased space to accommodate longer names like "OPTICS_LO_NIR"
             # Left margin fraction (must match shader’s x_margin_left)
             x_margin_left = 0.12
-            label_offset_fraction = 0.015  # 1.5% extra spacing to look centered
+            label_offset_fraction = 0.03
             label_x_fraction = x_margin_left - label_offset_fraction
             label_x = width * label_x_fraction
             text_visual.pos = (label_x, y_center)
