@@ -276,7 +276,10 @@ class RealtimeViewer:
             anchor_y="top",
             bold=True,
         )
-        self.battery_text.transforms.configure(canvas=self.canvas)
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+        )
+
 
 
         # Battery bar shaders
@@ -637,8 +640,9 @@ class RealtimeViewer:
 
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
+        bar = self._battery_rect_px
         bx = bar["x"] + bar["w"] / 2
-        by = bar["y"] + bar["h"] + (0.005 * height)
+        by = bar["y"] + bar["h"] + (0.015 * height)  # vertical gap ~1.5% of height
         self.battery_text.pos = (bx, by)
 
 
