@@ -279,7 +279,6 @@ class RealtimeViewer:
         self.battery_text.transforms.configure(
             canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
         )
-        self._battery_text_norm = (0.97, 0.04)  # (x, y) as fractions of width/height
 
 
 
@@ -731,7 +730,7 @@ class RealtimeViewer:
         # --- Battery bar in pixel coordinates (top-right corner) ---
         bar_width = 0.035 * width       # slightly wider bar
         bar_height = 0.022 * height
-        x = width - bar_width - 0.015 * width   # smaller right margin (~1.5%)
+        x = width - bar_width - 0.01 * width   # smaller right margin
         y = height - bar_height - 0.04 * height  # slightly closer to top (~4%)
 
 
