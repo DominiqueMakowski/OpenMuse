@@ -685,13 +685,10 @@ class RealtimeViewer:
 
     def _apply_dynamic_scaling(self, width: int, height: int):
         """Dynamically scale text and battery bar based on window size."""
-        # --- Base reference window for normalization ---
         base_width, base_height = 1400.0, 900.0
         scale_x = width / base_width
         scale_y = height / base_height
-
-        # Use height scaling for font size (better for wide displays)
-        font_scale = max(0.5, min(2.5, scale_y))  # TWEAK FONT SIZE PROPORTIONALLY
+        font_scale = max(0.5, min(2.5, scale_y))
 
         # --- Scale text ---
         base_sizes = {
@@ -701,7 +698,6 @@ class RealtimeViewer:
             "tick": 6,
             "battery": 7,
         }
-
         for text in self.channel_labels:
             text.font_size = base_sizes["channel"] * font_scale
         for _, text in self.eeg_std_labels:
@@ -713,15 +709,16 @@ class RealtimeViewer:
                 text.font_size = base_sizes["tick"] * font_scale
         self.battery_text.font_size = base_sizes["battery"] * font_scale
 
-        # --- Scale battery bar proportionally ---
+        # --- Scale and re-anchor battery bar ---
         base_rect = dict(x=0.9625, y=0.96, w=0.03, h=0.02)
-        self._battery_rect = dict(
-            x=base_rect["x"],
-            y=base_rect["y"],
-            w=base_rect["w"] * scale_x,
-            h=base_rect["h"] * scale_y,
-        )
+        # Compute actual normalized width/height, but anchor relative to top-right corner
+        # (We fix drift by recomputing x,y so the right/top edge stays constant)
+        w_scaled = base_rect["w"] * scale_x
+        h_scaled = base_rect["h"] * scale_y
+        x_scaled = 1.0 - (1.0 - base_rect["x"]) * scale_x
+        y_scaled = base_rect["y"]  # keep anchored to normalized top, scales cleanly with y
 
+        self._battery_rect = dict(x=x_scaled, y=y_scaled, w=w_scaled, h=h_scaled)
 
 
 
