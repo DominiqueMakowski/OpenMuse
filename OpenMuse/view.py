@@ -641,9 +641,10 @@ class RealtimeViewer:
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
         bar = self._battery_rect_px
-        bx = width * 1     # near right edge
-        by = height * 0.02    # near top (97% up the window)
+        # Use dynamically scaled position from _apply_dynamic_scaling
+        bx, by = self._battery_text_pos_px
         self.battery_text.pos = (bx, by)
+
 
         # Update color + label depending on level
         if self.battery_level is None:
@@ -728,21 +729,23 @@ class RealtimeViewer:
         for ch_ticks in self.y_tick_labels:
             for _, text in ch_ticks:
                 text.font_size = base_sizes["tick"] * font_scale
-        self.battery_text.font_size = base_sizes["battery"] * font_scale
+        self.battery_text.font_size = base_sizes["battery"] * (0.5 * scale_x + 0.5 * scale_y)
 
         # --- Battery bar in pixel coordinates (top-right corner) ---
-        bar_width = 0.035 * width       # slightly wider bar
+        bar_width = 0.035 * width
         bar_height = 0.022 * height
-        x = width - bar_width - 0.0075 * width   # smaller right margin
-        y = height - bar_height - 0.04 * height  # slightly closer to top (~4%)
+        x = width - bar_width - 0.0075 * width
+        y = height - bar_height - 0.04 * height
 
-
-        # Store position for later use in on_draw()
+        # Store battery bar rect
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-        # Projection must match pixel space for proper rendering
-        self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
-        self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
+        # --- Battery text position (just above bar, right-aligned) ---
+        text_offset_y = 0.012 * height   # proportional gap
+        bx = x + bar_width               # right edge of bar
+        by = y + bar_height + text_offset_y
+        self._battery_text_pos_px = (bx, by)
+
 
 
 
