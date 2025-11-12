@@ -654,7 +654,7 @@ class RealtimeViewer:
             w = self._battery_rect_px["w"]
             h = self._battery_rect_px["h"]
 
-            self.battery_text.pos = (x + w / 2, y - 10)
+            self.battery_text.pos = (x + w / 2, y + h + 10)
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
 
