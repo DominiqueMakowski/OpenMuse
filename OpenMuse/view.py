@@ -660,8 +660,7 @@ class RealtimeViewer:
                 x + w / 2,
                 y + h + 10,  # 10px above the bar
             )
-            self.battery_text.anchor_x = "center"
-            self.battery_text.anchor_y = "bottom"
+
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
 
