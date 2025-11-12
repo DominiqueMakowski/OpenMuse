@@ -641,7 +641,7 @@ class RealtimeViewer:
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
         bar = self._battery_rect_px
-        bx = width * 0.97     # near right edge
+        bx = width * 0.99     # near right edge
         by = height * 0.05    # near top (97% up the window)
         self.battery_text.pos = (bx, by)
 
