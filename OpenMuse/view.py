@@ -640,10 +640,6 @@ class RealtimeViewer:
 
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
-        bar = self._battery_rect_px
-        bx = bar["x"] + bar["w"] / 2
-        by = bar["y"] + bar["h"] - (0.015 * height) # vertical gap ~1.5% of height
-        self.battery_text.pos = (bx, by)
 
 
         # Update color + label depending on level
