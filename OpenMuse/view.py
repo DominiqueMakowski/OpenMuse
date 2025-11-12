@@ -694,6 +694,9 @@ class RealtimeViewer:
 
     def _apply_dynamic_scaling(self, width: int, height: int):
         """Dynamically scale text and battery bar based on window size."""
+        if not width or not height or width is None or height is None:
+            return
+        
         base_width, base_height = 1400.0, 900.0
         scale_x = width / base_width
         scale_y = height / base_height
@@ -1075,6 +1078,7 @@ class RealtimeViewer:
     def show(self):
         """Show the canvas and start the event loop."""
         self.canvas.show()
+        self._apply_dynamic_scaling(*self.canvas.size)
 
         @self.canvas.connect
         def on_close(event):
