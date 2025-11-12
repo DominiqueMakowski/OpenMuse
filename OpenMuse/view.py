@@ -266,20 +266,20 @@ class RealtimeViewer:
         self.battery_history = deque(maxlen=180)
         self.battery_level = None  # 0–100%
 
-        # Battery text label (now normalized coordinates)
+        # Battery text label (normalized coordinates, like other labels)
         self.battery_text = TextVisual(
             "Battery: ---%",
-            pos=(0.95, 0.97),  # top-right corner (normalized coordinates)
+            pos=(0.97, 0.96),  # near top-right corner
             color="yellow",
             font_size=7,
             anchor_x="right",
             anchor_y="top",
             bold=True,
         )
-        # Configure transform for normalized coordinate system
         self.battery_text.transforms.configure(
             canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
         )
+
 
 
         # Battery bar shaders
@@ -657,6 +657,7 @@ class RealtimeViewer:
 
             # --- Battery percentage text ---
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
+            self.battery_text.draw()
 
             # --- Background bar ---
             bg = np.array([
@@ -746,6 +747,7 @@ class RealtimeViewer:
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
+        self.battery_text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
         # Dynamically scale all text based on window size
         self._apply_dynamic_scaling(*event.size)
