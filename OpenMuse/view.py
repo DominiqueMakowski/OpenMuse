@@ -735,16 +735,17 @@ class RealtimeViewer:
         bar_width = 0.035 * width
         bar_height = 0.022 * height
         x = width - bar_width - 0.0075 * width
-        y = height * 0.04 - bar_height  # ~4% below top edge
 
-        # Store battery bar rect
+        # Move the bar higher (smaller fraction = closer to top)
+        y = height * 0.08  # e.g., 8% from bottom instead of 4%
+
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-        # --- Battery text position (just below bar, right-aligned) ---
-        text_offset_y = 0.008 * height
+        # --- Battery text position (fixed independently, do NOT base on bar y) ---
         bx = x + bar_width
-        by = y - text_offset_y
+        by = height * 0.05  # keeps text steady near top-right, independent of bar
         self._battery_text_pos_px = (bx, by)
+
 
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
