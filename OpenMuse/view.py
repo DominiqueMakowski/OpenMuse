@@ -746,6 +746,8 @@ class RealtimeViewer:
         by = y + bar_height + text_offset_y
         self._battery_text_pos_px = (bx, by)
 
+        self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
+        self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
 
 
 
