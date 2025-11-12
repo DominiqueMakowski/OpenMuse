@@ -656,8 +656,9 @@ class RealtimeViewer:
 
             self.battery_text.pos = (
                 x + w / 2,
-                height - (0.02 * height),  # position text near top of screen
+                min(height - 10, y + h + 0.015 * height),
             )
+
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
 
