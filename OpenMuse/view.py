@@ -279,6 +279,7 @@ class RealtimeViewer:
         self.battery_text.transforms.configure(
             canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
         )
+        self._battery_text_norm = (0.97, 0.04)  # (x, y) as fractions of width/height
 
 
 
@@ -636,10 +637,19 @@ class RealtimeViewer:
             text_visual.draw()
 
         # -------- Battery overlay drawing --------
-        if self.battery_level is not None:
-            width, height = self.canvas.size
+        width, height = self.canvas.size
 
-            # --- Color based on charge level ---
+        # Place the battery text using normalized -> pixel conversion
+        bx = width  * self._battery_text_norm[0]
+        by = height * self._battery_text_norm[1]
+        self.battery_text.pos = (bx, by)
+
+        # Update color + label depending on level
+        if self.battery_level is None:
+            # show placeholder even before data arrives
+            self.battery_text.color = "yellow"
+            self.battery_text.text = "Battery: ---%"
+        else:
             if self.battery_level >= 60:
                 col = (0.2, 0.85, 0.2, 1.0)
                 self.battery_text.color = "lime"
@@ -649,29 +659,28 @@ class RealtimeViewer:
             else:
                 col = (0.9, 0.25, 0.2, 1.0)
                 self.battery_text.color = "red"
+            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
+        # Draw the text (always)
+        self.battery_text.draw()
+
+        # Draw the bar only when we have a level
+        if self.battery_level is not None:
             x = self._battery_rect_px["x"]
             y = self._battery_rect_px["y"]
             w = self._battery_rect_px["w"]
             h = self._battery_rect_px["h"]
 
-            # --- Battery percentage text ---
-            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
-            self.battery_text.draw()
-
-            # --- Background bar ---
+            # Background bar
             bg = np.array([
-                [x, y],
-                [x + w, y],
-                [x, y + h],
-                [x + w, y + h],
+                [x, y], [x + w, y], [x, y + h], [x + w, y + h]
             ], dtype=np.float32)
             self._battery_bg_vbo.set_data(bg)
             self.battery_prog_bg["u_color"] = (0.25, 0.25, 0.25, 1.0)
             self.battery_prog_bg.draw("triangle_strip")
 
-            # --- Fill proportional to battery level ---
-            pad = 4  # pixel padding inside bar
+            # Fill proportional to battery level
+            pad = 4
             frac = max(0.0, min(1.0, self.battery_level / 100.0))
             w_fill = frac * (w - 2 * pad)
             fill = np.array([
@@ -683,6 +692,7 @@ class RealtimeViewer:
             self._battery_fill_vbo.set_data(fill)
             self.battery_prog_fill["u_color"] = col
             self.battery_prog_fill.draw("triangle_strip")
+
 
             # --- Finally draw the text ---
             self.battery_text.draw()
