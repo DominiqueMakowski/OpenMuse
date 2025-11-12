@@ -642,7 +642,7 @@ class RealtimeViewer:
         # Align battery text just above the bar, same right offset
         bar = self._battery_rect_px
         bx = (bar["x"] + bar["w"] / 2) / width
-        by = (bar["y"] + bar["h"] + (0.015 * height)) / height
+        by = (bar["y"] + bar["h"] + (0.005 * height)) / height
         self.battery_text.pos = (bx, by)
 
 
