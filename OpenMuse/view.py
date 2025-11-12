@@ -275,6 +275,7 @@ class RealtimeViewer:
             anchor_y="bottom",
             bold=True,
         )
+        self.battery_text.canvas = self.canvas
 
         # Battery bar shaders
         BAT_VERT = """
