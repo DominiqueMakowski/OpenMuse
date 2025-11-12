@@ -642,7 +642,7 @@ class RealtimeViewer:
         # Align battery text just above the bar, same right offset
         bar = self._battery_rect_px
         bx = width * 0.97     # near right edge
-        by = height * 0.97    # near top (97% up the window)
+        by = height * 0.03    # near top (97% up the window)
         self.battery_text.pos = (bx, by)
 
         # Update color + label depending on level
@@ -784,7 +784,7 @@ class RealtimeViewer:
                 color="white",
                 font_size=8,
                 anchor_x="center",
-                anchor_y="top",
+                anchor_y="bottom",
             )
             text.transforms.configure(
                 canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
