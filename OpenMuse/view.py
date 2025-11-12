@@ -306,7 +306,7 @@ class RealtimeViewer:
         self.battery_prog_fill["a_position"] = self._battery_fill_vbo
 
         # Normalized placement (top-right corner)
-        self._battery_rect = dict(x=0.9625, y=0.96, w=0.03, h=0.02)
+        # self._battery_rect = dict(x=0.9625, y=0.96, w=0.03, h=0.02)
 
         # Create GLOO program for signals
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
@@ -637,8 +637,6 @@ class RealtimeViewer:
             # -------- Battery overlay drawing --------
         if self.battery_level is not None:
             width, height = self.canvas.size
-            self.battery_text.pos = (width - 10, 15)
-            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
             # Color-code based on level
             if self.battery_level >= 60:
@@ -651,10 +649,14 @@ class RealtimeViewer:
                 col = (0.9, 0.25, 0.2, 1.0)
                 self.battery_text.color = "red"
 
-            x = self._battery_rect["x"]
-            y = self._battery_rect["y"]
-            w = self._battery_rect["w"]
-            h = self._battery_rect["h"]
+            x = self._battery_rect_px["x"]
+            y = self._battery_rect_px["y"]
+            w = self._battery_rect_px["w"]
+            h = self._battery_rect_px["h"]
+
+            self.battery_text.pos = (x + w / 2, y - 10)
+            self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
+
 
             # Background bar
             bg = np.array([
@@ -668,7 +670,7 @@ class RealtimeViewer:
             self.battery_prog_bg.draw("triangle_strip")
 
             # Fill proportional to battery level
-            pad = 0.002
+            pad = 4  # pixel padding
             frac = self.battery_level / 100.0
             w_fill = max(0.0, min(1.0, frac)) * (w - 2 * pad)
             fill = np.array([
@@ -709,16 +711,17 @@ class RealtimeViewer:
                 text.font_size = base_sizes["tick"] * font_scale
         self.battery_text.font_size = base_sizes["battery"] * font_scale
 
-        # --- Scale and re-anchor battery bar ---
-        base_rect = dict(x=0.9625, y=0.96, w=0.03, h=0.02)
-        # Compute actual normalized width/height, but anchor relative to top-right corner
-        # (We fix drift by recomputing x,y so the right/top edge stays constant)
-        w_scaled = base_rect["w"] * scale_x
-        h_scaled = base_rect["h"] * scale_y
-        x_scaled = 1.0 - (1.0 - base_rect["x"]) * scale_x
-        y_scaled = base_rect["y"]  # keep anchored to normalized top, scales cleanly with y
+        # --- Battery bar in pixel coordinates ---
+        bar_width = 0.03 * width
+        bar_height = 0.02 * height
+        x = width - bar_width - 0.02 * width   # ~2% right margin
+        y = height - bar_height - 0.02 * height  # ~2% top margin
 
-        self._battery_rect = dict(x=x_scaled, y=y_scaled, w=w_scaled, h=h_scaled)
+        self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
+
+        # Update projection to pixel space
+        self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
+        self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
 
 
 
