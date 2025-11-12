@@ -275,9 +275,11 @@ class RealtimeViewer:
             anchor_y="top",
             bold=True,
         )
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-        )
+        from vispy.visuals.transforms import STTransform
+
+        # Use pixel coordinate system instead of normalized viewport
+        self.battery_text.transform = STTransform()
+
 
         # Battery bar shaders
         BAT_VERT = """
@@ -656,9 +658,12 @@ class RealtimeViewer:
 
             self.battery_text.pos = (
                 x + w / 2,
-                y + h + 0.02 * height,  # 2% of window height above the bar
+                y + h + 10,  # 10px above the bar
             )
+            self.battery_text.anchor_x = "center"
+            self.battery_text.anchor_y = "bottom"
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
+
 
 
             # Background bar
@@ -717,8 +722,8 @@ class RealtimeViewer:
         # --- Battery bar in pixel coordinates ---
         bar_width = 0.03 * width
         bar_height = 0.02 * height
-        x = width - bar_width - 0.02 * width   # ~2% right margin
-        y = height - bar_height - 0.03 * height  # ~2% top margin
+        x = width - bar_width - 0.03 * width   # ~3% right margin
+        y = height - bar_height - 0.03 * height  # ~3% top margin
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
@@ -745,10 +750,6 @@ class RealtimeViewer:
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
-        # Keep battery text aligned on resize
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *event.size)
-        )
 
         # Dynamically scale all text based on window size
         self._apply_dynamic_scaling(*event.size)
