@@ -271,7 +271,7 @@ class RealtimeViewer:
             "Battery: ---%",
             pos=(0.97, 0.96),  # near top-right corner
             color="yellow",
-            font_size=7,
+            font_size=6,
             anchor_x="right",
             anchor_y="bottom",
             bold=True,
@@ -718,7 +718,7 @@ class RealtimeViewer:
             "eeg_std": 8,
             "time": 7,
             "tick": 6,
-            "battery": 7,
+            "battery": 6,
         }
         for text in self.channel_labels:
             text.font_size = base_sizes["channel"] * font_scale
