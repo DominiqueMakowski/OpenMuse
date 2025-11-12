@@ -272,7 +272,7 @@ class RealtimeViewer:
             color="yellow",
             font_size=7,
             anchor_x="center",
-            anchor_y="bottom",
+            anchor_y="top",
             bold=True,
         )
         self.battery_text.transforms.configure(
