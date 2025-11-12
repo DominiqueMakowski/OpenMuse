@@ -737,7 +737,7 @@ class RealtimeViewer:
         x = width - bar_width - 0.0075 * width
 
         # Move the bar higher (smaller fraction = closer to top)
-        y = height * 0.935  # e.g., 8% from bottom instead of 4%
+        y = height * 0.94  # e.g., 8% from bottom instead of 4%
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
