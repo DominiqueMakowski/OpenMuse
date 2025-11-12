@@ -275,9 +275,6 @@ class RealtimeViewer:
             anchor_y="bottom",
             bold=True,
         )
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-        )
 
         # Battery bar shaders
         BAT_VERT = """
@@ -296,9 +293,7 @@ class RealtimeViewer:
 
         # Programs for battery bar background and fill
         self.battery_prog_bg = gloo.Program(BAT_VERT, BAT_FRAG)
-        self.battery_prog_bg["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
         self.battery_prog_fill = gloo.Program(BAT_VERT, BAT_FRAG)
-        self.battery_prog_fill["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
 
         self._battery_bg_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
         self._battery_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
@@ -656,7 +651,7 @@ class RealtimeViewer:
             
             self.battery_text.pos = (
                 x + w / 2,
-                min(0.99, y + h + 0.02),  # just above the bar, stay within [0–1]
+                y + h + 15,  # 15 px above the bar
             )
             self.battery_text.text = f"Battery: {self.battery_level:.0f}%"
 
@@ -714,16 +709,16 @@ class RealtimeViewer:
                 text.font_size = base_sizes["tick"] * font_scale
         self.battery_text.font_size = base_sizes["battery"] * font_scale
 
-        # --- Battery bar in normalized coordinates (0–1) ---
-        bar_width = 0.03
-        bar_height = 0.02
-        x = 0.97 - bar_width   # right margin ≈ 3%
-        y = 0.97 - bar_height  # top margin ≈ 3%
+        # --- Battery bar in PIXEL coordinates ---
+        bar_width = 0.03 * width
+        bar_height = 0.02 * height
+        x = width - bar_width - 0.03 * width    # right margin (~3%)
+        y = height - bar_height - 0.05 * height  # top margin (~5%)
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-
-        self.battery_prog_bg["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
-        self.battery_prog_fill["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+        # Projection must match pixel space
+        self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
+        self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
 
 
 
@@ -744,10 +739,6 @@ class RealtimeViewer:
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
-        # Keep battery text aligned on resize
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *event.size)
-        )
 
         # Dynamically scale all text based on window size
         self._apply_dynamic_scaling(*event.size)
