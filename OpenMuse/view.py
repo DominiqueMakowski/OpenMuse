@@ -545,7 +545,7 @@ class RealtimeViewer:
             self.program.draw("line_strip", indices=index_buffer)
 
         # Draw channel labels and y-ticks
-        width, height = self.canvas.size
+        width, height = self.canvas.physical_size
         # Account for bottom margin (3% reserved for x-axis labels)
         y_bottom_margin = 0.03
         y_usable_height = 1.0 - y_bottom_margin
@@ -636,10 +636,14 @@ class RealtimeViewer:
             text_visual.draw()
 
         # -------- Battery overlay drawing --------
-        width, height = self.canvas.size
+        width, height = self.canvas.physical_size
 
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
+        bar = self._battery_rect_px
+        bx = bar["x"] + bar["w"] / 2
+        by = bar["y"] + bar["h"] + (0.015 * height) # vertical gap ~1.5% of height
+        self.battery_text.pos = (bx, by)
 
 
         # Update color + label depending on level
@@ -741,25 +745,24 @@ class RealtimeViewer:
 
     def on_resize(self, event):
         """Handle window resize."""
-        gloo.set_viewport(0, 0, *event.size)
+        # gloo.set_viewport(0, 0, *event.size)
+        gloo.set_viewport(0, 0, *self.canvas.physical_size)
 
-        # Update text transforms
+        # If you keep TextVisuals in pixel space, also configure with physical_size:
+        psize = self.canvas.physical_size
         for text in self.channel_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *psize))
         for _, text in self.eeg_std_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *psize))
         for ch_ticks in self.y_tick_labels:
             for _, text in ch_ticks:
-                text.transforms.configure(
-                    canvas=self.canvas, viewport=(0, 0, *event.size)
-                )
+                text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *psize))
         for _, text in self.time_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *psize))
+        self.battery_text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *psize))
 
-        self.battery_text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+        self._apply_dynamic_scaling(*psize)
 
-        # Dynamically scale all text based on window size
-        self._apply_dynamic_scaling(*event.size)
 
 
     def _update_time_labels(self):
@@ -780,7 +783,7 @@ class RealtimeViewer:
                 anchor_y="top",
             )
             text.transforms.configure(
-                canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+                canvas=self.canvas, viewport=(0, 0, *self.canvas.physical_size)
             )
             self.time_labels.append((time_val, text))
 
