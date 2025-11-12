@@ -888,9 +888,13 @@ class RealtimeViewer:
 
     def on_key_press(self, event):
         """Handle keyboard input for time window zooming."""
-        if event.key.name in ["+", "-", "="]:
+        key = getattr(event, "key", None)
+        if key is None or not hasattr(key, "name"):
+            return  # ignore invalid key events
+
+        if key.name in ["+", "-", "="]:
             # Time window zoom - change window_size (not u_scale which shifts signals)
-            if event.key.name in ["+", "="]:
+            if key.name in ["+", "="]:
                 # Zoom in - show less time (smaller window)
                 self.window_size = max(1.0, self.window_size * 0.8)
             else:
@@ -900,6 +904,7 @@ class RealtimeViewer:
             # Regenerate time labels with new window size
             self._update_time_labels()
             self.canvas.update()
+
 
     def on_mouse_wheel(self, event):
         """Handle mouse wheel for amplitude zoom (per channel group under mouse)."""
