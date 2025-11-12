@@ -640,9 +640,12 @@ class RealtimeViewer:
         width, height = self.canvas.size
 
         # Place the battery text using normalized -> pixel conversion
-        bx = width  * self._battery_text_norm[0]
-        by = height * self._battery_text_norm[1]
+        # Align battery text just above the bar, same right offset
+        bar = self._battery_rect_px
+        bx = bar["x"] + bar["w"] / 2
+        by = bar["y"] + bar["h"] + (0.015 * height)  # vertical gap ~1.5% of height
         self.battery_text.pos = (bx, by)
+
 
         # Update color + label depending on level
         if self.battery_level is None:
@@ -726,10 +729,11 @@ class RealtimeViewer:
         self.battery_text.font_size = base_sizes["battery"] * font_scale
 
         # --- Battery bar in pixel coordinates (top-right corner) ---
-        bar_width = 0.03 * width
-        bar_height = 0.02 * height
-        x = width - bar_width - 0.03 * width    # right margin (~3%)
-        y = height - bar_height - 0.05 * height  # top margin (~5%)
+        bar_width = 0.035 * width       # slightly wider bar
+        bar_height = 0.022 * height
+        x = width - bar_width - 0.015 * width   # smaller right margin (~1.5%)
+        y = height - bar_height - 0.04 * height  # slightly closer to top (~4%)
+
 
         # Store position for later use in on_draw()
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
