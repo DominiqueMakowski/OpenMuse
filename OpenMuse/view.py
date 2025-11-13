@@ -587,26 +587,27 @@ class RealtimeViewer:
                 tick_text.pos = (tick_x, tick_y)
                 tick_text.draw()
 
-            # Draw EEG standard deviation (impedance indicator) next to the signal area
-            # Right margin matches shader's x_margin_right
-            right_margin_fraction = 0.05
+        # ------------------ NEW NORMALIZED IMPEDANCE POSITION -------------------
+        # Right margin used in shader
+        x_margin_left = 0.12
+        x_margin_right = 0.05
 
-            # Compute the signal region's right edge in pixels
-            signal_end_x = width * (1.0 - right_margin_fraction)
+        # Compute center of the right margin in normalized coords
+        right_margin_center_x = 1.0 - (x_margin_right * 0.5)
 
-            # CHANGED: right-column x position
-            # Use a fixed pixel offset from the signal region, scaled gently with DPI,
-            # instead of a fraction of total width (which caused drift on large displays).
-            dpi_scale = max(width / 1400.0, height / 900.0)
-            right_offset_px = 24 * dpi_scale  # ~24px at 1400x900, scales with resolution
-            right_column_x = signal_end_x + right_offset_px
+        # Convert normalized → pixel coordinates
+        right_column_x = right_margin_center_x * width
 
-            # Draw EEG impedance (standard deviation) label
-            for eeg_ch_idx, std_text in self.eeg_std_labels:
-                if eeg_ch_idx == ch_idx:
-                    std_text.pos = (right_column_x, y_center)
-                    std_text.draw()
-                    break
+        # Draw EEG impedance label (σ: value)
+        for eeg_ch_idx, std_text in self.eeg_std_labels:
+            if eeg_ch_idx == ch_idx:
+                std_text.pos = (right_column_x, y_center)
+                std_text.anchor_x = "center"   # center horizontally
+                std_text.anchor_y = "center"
+                std_text.draw()
+                break
+        # ------------------------------------------------------------------------
+
 
         # Draw time labels (x-axis)
         x_margin_left = 0.12
