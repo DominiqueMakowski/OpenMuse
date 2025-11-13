@@ -773,8 +773,6 @@ class RealtimeViewer:
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
-        self.battery_text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
-
         # Dynamically scale all text based on window size
         self._apply_dynamic_scaling(*event.size)
 
