@@ -625,12 +625,11 @@ class RealtimeViewer:
         signal_width = width * (1.0 - x_margin_left - x_margin_right)
         x_start = width * x_margin_left
 
-        # Y position under signal region
-        y_bottom_margin_fraction = 0.03         # must match shader
-        y_bottom_margin_px = height * y_bottom_margin_fraction
-        y_tick_offset_px = height * 0.0125      # scalable padding
+        # Y position ABOVE the signal region (top)
+        y_signal_top_px = height            # top of usable signal region
+        y_tick_offset_px = height * 0.015   # scalable offset downward
+        y_pos = y_signal_top_px - y_tick_offset_px
 
-        y_pos = y_bottom_margin_px - y_tick_offset_px
 
         for time_val, text_visual in self.time_labels:
             x_fraction = (time_val + self.window_size) / self.window_size
