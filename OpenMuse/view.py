@@ -683,9 +683,6 @@ class RealtimeViewer:
 
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
-        bar = self._battery_rect_px
-        # Use dynamically scaled position from _apply_dynamic_scaling
-        bx, by = self._battery_text_pos_norm
         # convert normalized coords to pixel coords (using canvas size)
         self.battery_text.pos = self._battery_text_pos_norm
 
@@ -789,7 +786,7 @@ class RealtimeViewer:
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
         # normalized coordinates (0..1)
-        self._battery_text_pos_norm = (0.995, 0.04)
+        self._battery_text_pos_norm = (0.995, 0.965)
 
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
