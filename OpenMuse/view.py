@@ -255,11 +255,6 @@ class RealtimeViewer:
             position=(100, 100),
         )
 
-        # --- Normalized → Pixel transform for labels (time axis, etc.) ---
-        from vispy.visuals.transforms import STTransform
-        self.norm_to_px = STTransform()
-
-
                # -------- Detect optional Muse_BATTERY stream --------
         self.battery_stream_idx = None
         for stream_idx, s in enumerate(streams):
@@ -382,11 +377,22 @@ class RealtimeViewer:
             )  # Will be populated in _update_y_tick_labels()
 
         # Create text labels for time axis (x-axis)
-        # Configure for normalized coordinates
-        text.transforms.configure(canvas=self.canvas)
-        text.transforms.scene_transform = self.norm_to_px
-        self.time_labels.append((time_val, text))
-
+        self.time_labels = []
+        n_time_ticks = int(self.window_size) + 1  # One per second
+        for i in range(n_time_ticks):
+            time_val = -self.window_size + i  # From -window_size to 0
+            text = TextVisual(
+                f"{time_val:.0f}s",
+                pos=(0, 0),  # Will be positioned in on_draw
+                color="white",
+                font_size=7,
+                anchor_x="center",
+                anchor_y="top",
+            )
+            text.transforms.configure(
+                canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+            )
+            self.time_labels.append((time_val, text))
 
         # Initialize y-tick labels
         self._update_y_tick_labels(create_new=True)
@@ -614,21 +620,20 @@ class RealtimeViewer:
 
 
         # Draw time labels (x-axis)
-        # Draw time labels using normalized coordinates (same space as GL)
         x_margin_left = 0.12
         x_margin_right = 0.05
+        signal_width = width * (1.0 - x_margin_left - x_margin_right)
+        x_start = width * x_margin_left
+
 
         for time_val, text_visual in self.time_labels:
-            # Normalized fraction 0→1 across signal region
+            # Calculate x position (time_val is negative, from -window_size to 0)
+            # Map to signal area only (after the left margin)
             x_fraction = (time_val + self.window_size) / self.window_size
-
-            # Map into normalized x-space of the signals
-            x_norm = x_margin_left + (1.0 - x_margin_left - x_margin_right) * x_fraction
-            y_norm = 0.015  # 1.5% from bottom
-
-            text_visual.pos = (x_norm, y_norm)
+            x_pos = x_start + (x_fraction * signal_width)
+            # Increased bottom margin to 25px to prevent overlap with bottom channel
+            text_visual.pos = (x_pos, height - 25)
             text_visual.draw()
-
 
         # -------- Battery overlay drawing --------
         width, height = self.canvas.size
@@ -751,11 +756,6 @@ class RealtimeViewer:
     def on_resize(self, event):
         """Handle window resize."""
         gloo.set_viewport(0, 0, *event.size)
-
-        # Update normalized→pixel transform
-        self.norm_to_px.scale = (event.size[0], event.size[1], 1)
-        self.norm_to_px.translate = (0, 0, 0)
-
 
         # Update text transforms
         for text in self.channel_labels:
