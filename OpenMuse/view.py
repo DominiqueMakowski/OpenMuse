@@ -85,6 +85,40 @@ void main() {
 }
 """
 
+from vispy.visuals.transforms import BaseTransform
+
+class NormalizedScreenTransform(BaseTransform):
+    """
+    Transform that interprets input coordinates as normalized (0–1) screen
+    coordinates and converts them into framebuffer pixel coordinates,
+    independent of DPI or window size.
+    """
+    glsl_map = """
+        vec4 transform_position(vec4 pos) {
+            vec2 mapped = vec2(
+                pos.x * viewport_size.x,
+                pos.y * viewport_size.y
+            );
+            return vec4(mapped, pos.z, pos.w);
+        }
+    """
+
+    def __init__(self, canvas):
+        super().__init__()
+        self.canvas = canvas
+
+    def map(self, coords):
+        w, h = self.canvas.size
+        coords = coords.copy()
+        coords[:, 0] *= w
+        coords[:, 1] *= h
+        return coords
+
+    @property
+    def shader_map(self):
+        w, h = self.canvas.size
+        return dict(viewport_size=(float(w), float(h)))
+
 
 class RealtimeViewer:
     """High-performance real-time signal viewer using GLOO."""
@@ -280,8 +314,10 @@ class RealtimeViewer:
         )
 
         # Disable Vispy's DPI/world transforms so position stops drifting
+        norm = NormalizedScreenTransform(self.canvas)
         self.battery_text.transforms.configure(canvas=self.canvas)
-        self.battery_text.transforms.scene_transform = STTransform()
+        self.battery_text.transforms.scene_transform = norm
+
 
 
 
@@ -648,8 +684,8 @@ class RealtimeViewer:
         # Use dynamically scaled position from _apply_dynamic_scaling
         bx, by = self._battery_text_pos_norm
         # convert normalized coords to pixel coords (using canvas size)
-        bx, by = self._battery_text_pos_norm
-        self.battery_text.pos = (bx * width, by * height)
+        self.battery_text.pos = self._battery_text_pos_norm
+
 
 
 
@@ -774,9 +810,6 @@ class RealtimeViewer:
                 )
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
-
-        self.battery_text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
-        self.battery_text.transforms.scene_transform = STTransform()
 
         # Dynamically scale all text based on window size
         self._apply_dynamic_scaling(*event.size)
