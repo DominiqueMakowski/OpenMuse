@@ -744,7 +744,7 @@ class RealtimeViewer:
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
         # normalized coordinates (0..1)
-        self._battery_text_pos_norm = (0.97, 0.97)
+        self._battery_text_pos_norm = (0.995, 0.04)
 
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
