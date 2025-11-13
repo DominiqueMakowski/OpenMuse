@@ -87,6 +87,8 @@ void main() {
 
 from vispy.visuals.transforms import BaseTransform
 
+from vispy.visuals.transforms import BaseTransform
+
 class NormalizedScreenTransform(BaseTransform):
     """
     Transform that interprets input coordinates as normalized (0–1) screen
@@ -110,14 +112,15 @@ class NormalizedScreenTransform(BaseTransform):
     def map(self, coords):
         w, h = self.canvas.size
         coords = coords.copy()
-        coords[:, 0] *= w
-        coords[:, 1] *= h
+        coords[..., 0] *= w
+        coords[..., 1] *= h
         return coords
 
-    @property
+    # ❗ NOTE: this is now a normal method, not a @property
     def shader_map(self):
         w, h = self.canvas.size
         return dict(viewport_size=(float(w), float(h)))
+
 
 
 class RealtimeViewer:
