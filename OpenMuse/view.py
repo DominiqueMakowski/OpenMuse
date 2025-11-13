@@ -721,7 +721,7 @@ class RealtimeViewer:
             "channel": 8,
             "eeg_std": 8,
             "time": 7,
-            "tick": 6,
+            "tick": 4,
             "battery": 6,
         }
         for text in self.channel_labels:
