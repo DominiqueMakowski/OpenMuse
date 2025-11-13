@@ -267,18 +267,22 @@ class RealtimeViewer:
         self.battery_level = None  # 0–100%
 
         # Battery text label (normalized coordinates, like other labels)
+        from vispy.visuals.transforms import STTransform
+
         self.battery_text = TextVisual(
             "Battery: ---%",
-            pos=(0.97, 0.96),  # near top-right corner
+            pos=(0, 0),  # We override this each frame
             color="yellow",
             font_size=6,
             anchor_x="right",
             anchor_y="bottom",
             bold=True,
         )
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-        )
+
+        # Disable Vispy's DPI/world transforms so position stops drifting
+        self.battery_text.transforms.configure(canvas=self.canvas)
+        self.battery_text.transforms.scene_transform = STTransform()
+
 
 
 
