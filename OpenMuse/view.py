@@ -587,22 +587,15 @@ class RealtimeViewer:
                 tick_text.pos = (tick_x, tick_y)
                 tick_text.draw()
 
-        # ------------------ NEW NORMALIZED IMPEDANCE POSITION -------------------
-        # Right margin used in shader
-        x_margin_left = 0.12
+        # ------------------ EEG IMPEDANCE LABEL (Right-margin, normalized) -------------------
         x_margin_right = 0.05
+        right_column_x = width * (1.0 - x_margin_right * 0.5)  # center of right margin
 
-        # Compute center of the right margin in normalized coords
-        right_margin_center_x = 1.0 - (x_margin_right * 0.5)
-
-        # Convert normalized → pixel coordinates
-        right_column_x = right_margin_center_x * width
-
-        # Draw EEG impedance label (σ: value)
+        # Find matching EEG label and draw it here
         for eeg_ch_idx, std_text in self.eeg_std_labels:
             if eeg_ch_idx == ch_idx:
                 std_text.pos = (right_column_x, y_center)
-                std_text.anchor_x = "center"   # center horizontally
+                std_text.anchor_x = "center"
                 std_text.anchor_y = "center"
                 std_text.draw()
                 break
