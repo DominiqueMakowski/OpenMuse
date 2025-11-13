@@ -273,7 +273,7 @@ class RealtimeViewer:
             color="yellow",
             font_size=6,
             anchor_x="right",
-            anchor_y="center",
+            anchor_y="bottom",
             bold=True,
         )
         self.battery_text.transforms.configure(
@@ -642,8 +642,10 @@ class RealtimeViewer:
         # Align battery text just above the bar, same right offset
         bar = self._battery_rect_px
         # Use dynamically scaled position from _apply_dynamic_scaling
-        bx, by = self._battery_text_pos_px
-        self.battery_text.pos = (bx, by)
+        bx, by = self._battery_text_pos_norm
+        # convert normalized coords to pixel coords (using canvas size)
+        self.battery_text.pos = (bx * width, by * height)
+
 
 
         # Update color + label depending on level
@@ -741,11 +743,8 @@ class RealtimeViewer:
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-        # --- Battery text position: centered vertically on right margin ---
-        bx = width * 0.98      # 98% of width, near right border
-        by = height * 0.50     # vertical center (50%)
-
-        self._battery_text_pos_px = (bx, by)
+        # normalized coordinates (0..1)
+        self._battery_text_pos_norm = (0.97, 0.97)
 
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
