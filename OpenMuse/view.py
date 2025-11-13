@@ -217,7 +217,7 @@ class RealtimeViewer:
                 else:  # GYRO
                     color = gyro_color
                     y_range = 490.0  # 245 - (-245) = 490
-                    y_ticks = [-245, 0, 245]  # Relative to center
+                    y_ticks = [-150, 0, 150]  # Relative to center
 
                 self.channel_info.append(
                     {
@@ -720,7 +720,7 @@ class RealtimeViewer:
         base_sizes = {
             "channel": 8,
             "eeg_std": 8,
-            "time": 7,
+            "time": 6,
             "tick": 4,
             "battery": 6,
         }
