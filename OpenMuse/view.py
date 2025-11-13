@@ -741,10 +741,14 @@ class RealtimeViewer:
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-        # --- Battery text position (fixed independently, do NOT base on bar y) ---
-        bx = x + bar_width
-        by = height * 0.02  # keeps text steady near top-right, independent of bar
+        # --- Battery text position: centered vertically on right margin ---
+        bx = width * 0.98      # 98% of width, near right border
+        by = height * 0.50     # vertical center (50%)
+
         self._battery_text_pos_px = (bx, by)
+        self.battery_text.anchor_x = "right"
+        self.battery_text.anchor_y = "center"
+
 
 
 
