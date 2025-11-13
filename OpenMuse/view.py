@@ -273,7 +273,7 @@ class RealtimeViewer:
             color="yellow",
             font_size=6,
             anchor_x="right",
-            anchor_y="bottom",
+            anchor_y="center",
             bold=True,
         )
         self.battery_text.transforms.configure(
@@ -748,8 +748,6 @@ class RealtimeViewer:
         self._battery_text_pos_px = (bx, by)
         self.battery_text.anchor_x = "right"
         self.battery_text.anchor_y = "center"
-
-
 
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
