@@ -209,7 +209,7 @@ class RealtimeViewer:
                 elif is_optics:
                     color = optics_colors[ch_idx % len(optics_colors)]
                     y_range = 0.4
-                    y_ticks = [-0.5, 0, 0.5]  # Relative to center
+                    y_ticks = [-1.0, 0, 1.0]  # Relative to center
                 elif "ACC" in ch_name.upper():
                     color = acc_color
                     y_range = 2.0  # 1 - (-1) = 2.0
