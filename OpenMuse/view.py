@@ -85,43 +85,6 @@ void main() {
 }
 """
 
-from vispy.visuals.transforms import BaseTransform
-
-from vispy.visuals.transforms import BaseTransform
-
-class NormalizedScreenTransform(BaseTransform):
-    """
-    Transform that interprets input coordinates as normalized (0–1) screen
-    coordinates and converts them into framebuffer pixel coordinates,
-    independent of DPI or window size.
-    """
-    glsl_map = """
-        vec4 transform_position(vec4 pos) {
-            vec2 mapped = vec2(
-                pos.x * viewport_size.x,
-                pos.y * viewport_size.y
-            );
-            return vec4(mapped, pos.z, pos.w);
-        }
-    """
-
-    def __init__(self, canvas):
-        super().__init__()
-        self.canvas = canvas
-
-    def map(self, coords):
-        w, h = self.canvas.size
-        coords = coords.copy()
-        coords[..., 0] *= w
-        coords[..., 1] *= h
-        return coords
-
-    # ❗ NOTE: this is now a normal method, not a @property
-    def shader_map(self):
-        w, h = self.canvas.size
-        return dict(viewport_size=(float(w), float(h)))
-
-
 
 class RealtimeViewer:
     """High-performance real-time signal viewer using GLOO."""
@@ -304,24 +267,18 @@ class RealtimeViewer:
         self.battery_level = None  # 0–100%
 
         # Battery text label (normalized coordinates, like other labels)
-        from vispy.visuals.transforms import STTransform
-
         self.battery_text = TextVisual(
             "Battery: ---%",
-            pos=(0, 0),  # We override this each frame
+            pos=(0.97, 0.96),  # near top-right corner
             color="yellow",
             font_size=6,
             anchor_x="right",
             anchor_y="bottom",
             bold=True,
         )
-
-        # Disable Vispy's DPI/world transforms so position stops drifting
-        norm = NormalizedScreenTransform(self.canvas)
-        self.battery_text.transforms.configure(canvas=self.canvas)
-        self.battery_text.transforms.scene_transform = norm
-
-
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+        )
 
 
 
@@ -683,10 +640,10 @@ class RealtimeViewer:
 
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
-        # convert normalized coords to pixel coords (using canvas size)
-        self.battery_text.pos = self._battery_text_pos_norm
-
-
+        bar = self._battery_rect_px
+        # Use dynamically scaled position from _apply_dynamic_scaling
+        bx, by = self._battery_text_pos_px
+        self.battery_text.pos = (bx, by)
 
 
         # Update color + label depending on level
@@ -774,7 +731,6 @@ class RealtimeViewer:
                 text.font_size = base_sizes["tick"] * font_scale
         self.battery_text.font_size = base_sizes["battery"] * (0.5 * scale_x + 0.5 * scale_y)
 
-
         # --- Battery bar in pixel coordinates (top-right corner) ---
         bar_width = 0.035 * width
         bar_height = 0.022 * height
@@ -785,8 +741,11 @@ class RealtimeViewer:
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-        # normalized coordinates (0..1)
-        self._battery_text_pos_norm = (0.995, 0.965)
+        # --- Battery text position (fixed independently, do NOT base on bar y) ---
+        bx = x + bar_width
+        by = height * 0.02  # keeps text steady near top-right, independent of bar
+        self._battery_text_pos_px = (bx, by)
+
 
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
@@ -810,6 +769,8 @@ class RealtimeViewer:
                 )
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+
+        self.battery_text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
         # Dynamically scale all text based on window size
         self._apply_dynamic_scaling(*event.size)
