@@ -217,7 +217,7 @@ class RealtimeViewer:
                 else:  # GYRO
                     color = gyro_color
                     y_range = 490.0  # 245 - (-245) = 490
-                    y_ticks = [-150, 0, 150]  # Relative to center
+                    y_ticks = [-245, 0, 245]  # Relative to center
 
                 self.channel_info.append(
                     {
