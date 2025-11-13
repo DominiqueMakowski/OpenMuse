@@ -648,7 +648,20 @@ class RealtimeViewer:
         # Use dynamically scaled position from _apply_dynamic_scaling
         bx, by = self._battery_text_pos_norm
         # convert normalized coords to pixel coords (using canvas size)
-        self.battery_text.pos = (bx * width, by * height)
+        font_scale = self.battery_text.font_size
+        reference_size = 6  # your base size defined in base_sizes["battery"]
+
+        scale_factor = font_scale / reference_size
+
+        # Approximate pixel shift needed to counter font scaling drift
+        compensate_x = (scale_factor - 1.0) * 0.5 * self.battery_text.text_width
+
+        # Shift right edge back into place
+        px = bx * width + compensate_x
+        py = by * height
+
+        self.battery_text.pos = (px, py)
+
 
 
 
@@ -736,6 +749,8 @@ class RealtimeViewer:
             for _, text in ch_ticks:
                 text.font_size = base_sizes["tick"] * font_scale
         self.battery_text.font_size = base_sizes["battery"] * (0.5 * scale_x + 0.5 * scale_y)
+        self.battery_text._update()  # <-- Required so text_width is correct
+
 
         # --- Battery bar in pixel coordinates (top-right corner) ---
         bar_width = 0.035 * width
