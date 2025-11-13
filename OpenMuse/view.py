@@ -162,6 +162,8 @@ class RealtimeViewer:
         self.verbose = verbose
         self.start_time = time.time()
 
+
+
         # Collect channel info from all streams
         # First, detect active channels (non-zero variance)
         self._detect_active_channels(streams, verbose)
@@ -264,10 +266,10 @@ class RealtimeViewer:
         self.battery_history = deque(maxlen=180)
         self.battery_level = None  # 0–100%
 
-        # Battery text label (pixel coordinates)
+        # Battery text label (normalized coordinates, like other labels)
         self.battery_text = TextVisual(
             "Battery: ---%",
-            pos=(0.97, 0.96),  # placeholder; will be updated with pixels
+            pos=(0.97, 0.96),  # near top-right corner
             color="yellow",
             font_size=6,
             anchor_x="right",
@@ -277,6 +279,8 @@ class RealtimeViewer:
         self.battery_text.transforms.configure(
             canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
         )
+
+
 
         # Battery bar shaders
         BAT_VERT = """
@@ -301,6 +305,9 @@ class RealtimeViewer:
         self._battery_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
         self.battery_prog_bg["a_position"] = self._battery_bg_vbo
         self.battery_prog_fill["a_position"] = self._battery_fill_vbo
+
+        # Normalized placement (top-right corner)
+        # self._battery_rect = dict(x=0.9625, y=0.96, w=0.03, h=0.02)
 
         # Create GLOO program for signals
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
@@ -411,7 +418,7 @@ class RealtimeViewer:
             print(f"  Total channels: {self.total_channels}")
             print(f"  Samples per channel: {self.n_samples}")
             print(f"  Window size: {window_size}s")
-            print(f"  Update rate: {1/self.update_interval:.0f} Hz")
+            print(f"  Update rate: {1/update_interval:.0f} Hz")
             print("\nPress '+' or '-' to zoom time axis")
             print("Scroll mouse wheel to zoom amplitude")
             print("Close window to stop.\n")
@@ -512,6 +519,7 @@ class RealtimeViewer:
         self.y_limit_lines = np.array(y_limit_lines, dtype=np.float32)
         self.zero_lines = np.array(zero_lines, dtype=np.float32)
 
+
     def on_draw(self, event):
         """Render the scene."""
         gloo.clear(color=(0.1, 0.1, 0.1, 1.0))  # type: ignore[arg-type]
@@ -564,6 +572,8 @@ class RealtimeViewer:
             text_visual.pos = (label_x, y_center)
             text_visual.draw()  # <— don’t forget to draw each label
 
+
+
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
             # Position ticks to match shader positioning
             # Place at just before signal starts
@@ -587,19 +597,26 @@ class RealtimeViewer:
                 tick_text.pos = (tick_x, tick_y)
                 tick_text.draw()
 
-        # ------------------ EEG IMPEDANCE LABEL (Right-margin, normalized) -------------------
-        x_margin_right = 0.05
-        right_column_x = width * (1.0 - x_margin_right * 0.5)  # center of right margin
+            # Draw EEG standard deviation (impedance indicator) on the right side
+            # Draw EEG standard deviation (impedance indicator) next to the signal area
+            # Right margin matches shader's x_margin_right
+            right_margin_fraction = 0.05
 
-        # Find matching EEG label and draw it here
-        for eeg_ch_idx, std_text in self.eeg_std_labels:
-            if eeg_ch_idx == ch_idx:
-                std_text.pos = (right_column_x, y_center)
-                std_text.anchor_x = "center"
-                std_text.anchor_y = "center"
-                std_text.draw()
-                break
-        # ------------------------------------------------------------------------
+            # Compute the signal region's right edge
+            signal_end_x = width * (1.0 - right_margin_fraction)
+
+            # Dynamic offset: scale with window width (proportional, not fixed pixels)
+            # About 4% of window width looks good visually
+            right_offset_fraction = 0.04
+            right_column_x = width * (1.0 - right_margin_fraction + right_offset_fraction)
+
+            # Draw EEG impedance (standard deviation) label
+            for eeg_ch_idx, std_text in self.eeg_std_labels:
+                if eeg_ch_idx == ch_idx:
+                    std_text.pos = (right_column_x, y_center)
+                    std_text.draw()
+                    break
+
 
 
         # Draw time labels (x-axis)
@@ -608,21 +625,31 @@ class RealtimeViewer:
         signal_width = width * (1.0 - x_margin_left - x_margin_right)
         x_start = width * x_margin_left
 
+        # Y position under signal region
+        y_bottom_margin_fraction = 0.03         # must match shader
+        y_bottom_margin_px = height * y_bottom_margin_fraction
+        y_tick_offset_px = height * 0.0125      # scalable padding
+
+        y_pos = y_bottom_margin_px - y_tick_offset_px
+
         for time_val, text_visual in self.time_labels:
-            # Calculate x position (time_val is negative, from -window_size to 0)
-            # Map to signal area only (after the left margin)
             x_fraction = (time_val + self.window_size) / self.window_size
             x_pos = x_start + (x_fraction * signal_width)
-            # Increased bottom margin to 25px to prevent overlap with bottom channel
-            text_visual.pos = (x_pos, height - 25)
+
+            text_visual.pos = (x_pos, y_pos)
             text_visual.draw()
+
 
         # -------- Battery overlay drawing --------
         width, height = self.canvas.size
 
-        # Place the battery text using stored pixel position
+        # Place the battery text using normalized -> pixel conversion
+        # Align battery text just above the bar, same right offset
+        bar = self._battery_rect_px
+        # Use dynamically scaled position from _apply_dynamic_scaling
         bx, by = self._battery_text_pos_px
         self.battery_text.pos = (bx, by)
+
 
         # Update color + label depending on level
         if self.battery_level is None:
@@ -676,8 +703,12 @@ class RealtimeViewer:
             self.battery_prog_fill["u_color"] = col
             self.battery_prog_fill.draw("triangle_strip")
 
+
+
             # --- Finally draw the text ---
             self.battery_text.draw()
+
+
 
     def _apply_dynamic_scaling(self, width: int, height: int):
         """Dynamically scale text and battery bar based on window size."""
@@ -711,17 +742,21 @@ class RealtimeViewer:
         x = width - bar_width - 0.0075 * width
 
         # Move the bar higher (smaller fraction = closer to top)
-        y = height * 0.94  # near top
+        y = height * 0.94  # e.g., 8% from bottom instead of 4%
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-        # --- Battery text position ---
+        # --- Battery text position (fixed independently, do NOT base on bar y) ---
         bx = x + bar_width
-        by = height * 0.96  # just above bar in pixel space
+        by = height * 0.02  # keeps text steady near top-right, independent of bar
         self._battery_text_pos_px = (bx, by)
+
+
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
         self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
+
+
 
     def on_resize(self, event):
         """Handle window resize."""
@@ -744,6 +779,7 @@ class RealtimeViewer:
 
         # Dynamically scale all text based on window size
         self._apply_dynamic_scaling(*event.size)
+
 
     def _update_time_labels(self):
         """Update time labels based on current window_size."""
@@ -880,6 +916,7 @@ class RealtimeViewer:
             # Regenerate time labels with new window size
             self._update_time_labels()
             self.canvas.update()
+
 
     def on_mouse_wheel(self, event):
         """Handle mouse wheel for amplitude zoom (per channel group under mouse)."""
@@ -1038,7 +1075,7 @@ class RealtimeViewer:
             channel_global_idx = self.channel_info.index(ch_info)
             self.data[:, channel_global_idx] = normalized_data
 
-        # -------- Battery stream update --------
+                # -------- Battery stream update --------
         if self.battery_stream_idx is not None:
             bat_stream = self.streams[self.battery_stream_idx]
             try:
@@ -1050,6 +1087,7 @@ class RealtimeViewer:
                     self.battery_history.append(latest)
             except Exception:
                 pass
+
 
         # Update vertex positions
         self.program["a_position"].set_data(self.data.T.ravel().astype(np.float32))
