@@ -85,6 +85,8 @@ void main() {
 }
 """
 
+RIGHT_UI_OFFSET_PX = 18   # adjust this number to move things right
+
 
 class RealtimeViewer:
     """High-performance real-time signal viewer using GLOO."""
@@ -600,11 +602,12 @@ class RealtimeViewer:
 
             # Draw EEG standard deviation (impedance indicator) next to the signal area
             # Anchor to the same right margin as the shader (x_margin_right = 0.05)
-            x_margin_right = 0.05  # must match shader
+            x_margin_right = 0.05
             signal_right_px = width * (1.0 - x_margin_right)
 
-            # Put σ labels a few pixels *inside* the signal region, so they never cross the margin
-            right_column_x = signal_right_px - 6  # 6 px inside the signal area
+            # Move to the RIGHT using a fixed-per-pixel offset
+            right_column_x = signal_right_px + RIGHT_UI_OFFSET_PX
+
 
             # Draw EEG impedance (standard deviation) label
             for eeg_ch_idx, std_text in self.eeg_std_labels:
@@ -641,10 +644,10 @@ class RealtimeViewer:
 
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
-        bar = self._battery_rect_px
-        # Use dynamically scaled position from _apply_dynamic_scaling
-        bx, by = self._battery_text_pos_px
-        self.battery_text.pos = (bx, by)
+        bx = signal_right_px + RIGHT_UI_OFFSET_PX
+        by = height * 0.02
+        self._battery_text_pos_px = (bx, by)
+
 
 
         # Update color + label depending on level
