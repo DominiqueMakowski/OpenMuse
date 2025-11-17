@@ -216,7 +216,7 @@ class RealtimeViewer:
                     y_ticks = [-1, 0, 1]  # Relative to center
                 else:  # GYRO
                     color = gyro_color
-                    y_range = 490.0  # 245 - (-245) = 490
+                    y_range = 490.0
                     y_ticks = [-150, 0, 150]  # Relative to center
 
                 self.channel_info.append(
@@ -598,17 +598,13 @@ class RealtimeViewer:
                 tick_text.draw()
 
             # Draw EEG standard deviation (impedance indicator) on the right side
-            # Draw EEG standard deviation (impedance indicator) next to the signal area
-            # Right margin matches shader's x_margin_right
-            right_margin_fraction = 0.05
+            # --- Resolution-independent impedance label placement ---
+            x_margin_right = 0.05  # must match shader
+            signal_right_px = width * (1.0 - x_margin_right)
 
-            # Compute the signal region's right edge
-            signal_end_x = width * (1.0 - right_margin_fraction)
+            # place impedance labels 10 px right of signal region
+            right_column_x = signal_right_px + 10
 
-            # Dynamic offset: scale with window width (proportional, not fixed pixels)
-            # About 4% of window width looks good visually
-            right_offset_fraction = 0.04
-            right_column_x = width * (1.0 - right_margin_fraction + right_offset_fraction)
 
             # Draw EEG impedance (standard deviation) label
             for eeg_ch_idx, std_text in self.eeg_std_labels:
@@ -746,9 +742,16 @@ class RealtimeViewer:
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
         # --- Battery text position (fixed independently, do NOT base on bar y) ---
-        bx = x + bar_width
-        by = height * 0.02  # keeps text steady near top-right, independent of bar
+        # --- Resolution-independent battery text position ---
+        x_margin_right = 0.05  # must match shader
+        signal_right_px = width * (1.0 - x_margin_right)
+
+        # put battery text 10 px right of signal region and 18 px down from top
+        bx = signal_right_px + 10
+        by = height - 18
+
         self._battery_text_pos_px = (bx, by)
+
 
 
 
