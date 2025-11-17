@@ -85,8 +85,6 @@ void main() {
 }
 """
 
-RIGHT_UI_OFFSET_PX = 18   # adjust this number to move things right
-
 
 class RealtimeViewer:
     """High-performance real-time signal viewer using GLOO."""
@@ -218,7 +216,7 @@ class RealtimeViewer:
                     y_ticks = [-1, 0, 1]  # Relative to center
                 else:  # GYRO
                     color = gyro_color
-                    y_range = 490.0  # 245 - (-245) = 490
+                    y_range = 490.0
                     y_ticks = [-150, 0, 150]  # Relative to center
 
                 self.channel_info.append(
@@ -599,14 +597,13 @@ class RealtimeViewer:
                 tick_text.pos = (tick_x, tick_y)
                 tick_text.draw()
 
-
-            # Draw EEG standard deviation (impedance indicator) next to the signal area
-            # Anchor to the same right margin as the shader (x_margin_right = 0.05)
-            x_margin_right = 0.05
+            # Draw EEG standard deviation (impedance indicator) on the right side
+            # --- Resolution-independent impedance label placement ---
+            x_margin_right = 0.05  # must match shader
             signal_right_px = width * (1.0 - x_margin_right)
 
-            # Move to the RIGHT using a fixed-per-pixel offset
-            right_column_x = signal_right_px + RIGHT_UI_OFFSET_PX
+            # place impedance labels 10 px right of signal region
+            right_column_x = signal_right_px + 20
 
 
             # Draw EEG impedance (standard deviation) label
@@ -615,7 +612,6 @@ class RealtimeViewer:
                     std_text.pos = (right_column_x, y_center)
                     std_text.draw()
                     break
-
 
 
 
@@ -644,7 +640,10 @@ class RealtimeViewer:
 
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
-
+        bar = self._battery_rect_px
+        # Use dynamically scaled position from _apply_dynamic_scaling
+        bx, by = self._battery_text_pos_px
+        self.battery_text.pos = (bx, by)
 
 
         # Update color + label depending on level
@@ -742,15 +741,18 @@ class RealtimeViewer:
 
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
-        # --- Battery text position anchored to signal region right edge ---
+        # --- Battery text position (fixed independently, do NOT base on bar y) ---
+        # --- Resolution-independent battery text position ---
         x_margin_right = 0.05  # must match shader
         signal_right_px = width * (1.0 - x_margin_right)
 
-        # Horizontal: aligned with signal area right edge
-        # Vertical: keep same height behaviour as before (near bottom/top depending on your layout)
-        bx = signal_right_px + RIGHT_UI_OFFSET_PX     # Fixed offset to the right
-        by = height * 0.02                             # Bottom offset
+        # put battery text 10 px right of signal region and 18 px down from top
+        bx = signal_right_px + 10
+        by = height - 18
+
         self._battery_text_pos_px = (bx, by)
+
+
 
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
