@@ -644,9 +644,6 @@ class RealtimeViewer:
 
         # Place the battery text using normalized -> pixel conversion
         # Align battery text just above the bar, same right offset
-        bx = signal_right_px + RIGHT_UI_OFFSET_PX
-        by = height * 0.02
-        self._battery_text_pos_px = (bx, by)
 
 
 
@@ -751,12 +748,9 @@ class RealtimeViewer:
 
         # Horizontal: aligned with signal area right edge
         # Vertical: keep same height behaviour as before (near bottom/top depending on your layout)
-        bx = signal_right_px
-        by = height * 0.02
-
+        bx = signal_right_px + RIGHT_UI_OFFSET_PX     # Fixed offset to the right
+        by = height * 0.02                             # Bottom offset
         self._battery_text_pos_px = (bx, by)
-
-
 
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
