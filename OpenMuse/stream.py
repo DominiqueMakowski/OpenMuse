@@ -230,28 +230,10 @@ class SensorStream:
 
 
 def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStream]:
-    """Create all LSL outlets for the available sensor streams."""
-    # NOTE: This function now relies on the global EEG_CHANNELS and OPTICS_CHANNELS
-    # being updated by the 'MuseS.connect_and_initialize' call BEFORE it runs.
+    """Create LSL outlets for streams with fixed channel counts (ACC/GYRO, BATTERY).
+    EEG and OPTICS are created lazily based on actual data shape.
+    """
     streams = {}
-
-    # --- EEG Stream ---
-    info_eeg = StreamInfo(
-        name=f"Muse_EEG",
-        stype="EEG",
-        n_channels=len(EEG_CHANNELS),
-        sfreq=256.0,
-        dtype="float32",
-        source_id=f"{device_id}_eeg",
-    )
-    desc_eeg = info_eeg.desc  # <-- Access as attribute (no parentheses)
-    desc_eeg.append_child_value("manufacturer", "Muse")
-    desc_eeg.append_child_value("model", "MuseS")
-    desc_eeg.append_child_value("device", device_name)
-    channels = desc_eeg.append_child("channels")
-    for ch_name in EEG_CHANNELS:
-        channels.append_child("channel").append_child_value("label", ch_name)
-    streams["EEG"] = SensorStream(outlet=StreamOutlet(info_eeg))
 
     # --- ACCGYRO Stream ---
     info_accgyro = StreamInfo(
@@ -271,24 +253,6 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
         channels_acc.append_child("channel").append_child_value("label", ch_name)
     streams["ACCGYRO"] = SensorStream(outlet=StreamOutlet(info_accgyro))
 
-    # --- OPTICS Stream ---
-    info_optics = StreamInfo(
-        name=f"Muse_OPTICS",
-        stype="PPG",
-        n_channels=len(OPTICS_CHANNELS),
-        sfreq=64.0,
-        dtype="float32",
-        source_id=f"{device_id}_optics",
-    )
-    desc_opt = info_optics.desc
-    desc_opt.append_child_value("manufacturer", "Muse")
-    desc_opt.append_child_value("model", "MuseS")
-    desc_opt.append_child_value("device", device_name)
-    channels_opt = desc_opt.append_child("channels")
-    for ch_name in OPTICS_CHANNELS:
-        channels_opt.append_child("channel").append_child_value("label", ch_name)
-    streams["OPTICS"] = SensorStream(outlet=StreamOutlet(info_optics))
-
     # --- Battery Stream ---
     info_battery = StreamInfo(
         name=f"Muse_BATTERY",
@@ -307,7 +271,9 @@ def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStr
         channels_batt.append_child("channel").append_child_value("label", ch_name)
     streams["BATTERY"] = SensorStream(outlet=StreamOutlet(info_battery))
 
+    # EEG and OPTICS outlets will be created lazily when the first data arrive
     return streams
+
 
 
 async def _stream_async(
@@ -339,33 +305,12 @@ async def _stream_async(
         lsl_now : float
             The computer's LSL clock time when the BLE message was received.
         """
-        # CRITICAL FIX: The data_array must have the same number of columns
-        # as the number of channels created in the LSL stream, plus 1 for
-        # the device_time column. If the device sends fewer channels than
-        # the StreamInfo specified, the LSL push will fail.
-        # This check is now less critical since _create_lsl_outlets is moved,
-        # but remains a good practice.
         if data_array.size == 0 or data_array.shape[1] < 2:
             return  # No data in this packet
 
         stream = streams.get(sensor_type)
         if stream is None:
             return  # No LSL outlet for this type
-        
-        # Check for channel count mismatch *at runtime* (less likely after the fix)
-        # The number of data columns must match the LSL channel count.
-        n_data_channels = data_array.shape[1] - 1
-        n_lsl_channels = stream.outlet.info().channel_count()
-        if n_data_channels != n_lsl_channels:
-             # This indicates an issue in the underlying decode.py or MuseS.connect_and_initialize
-             # where the global channel list did not update correctly for the preset.
-             # We will skip this packet to prevent a crash, but it means the data is inconsistent.
-             if verbose:
-                 print(f"Channel mismatch for {sensor_type}: "
-                       f"Data has {n_data_channels} channels, "
-                       f"LSL StreamInfo has {n_lsl_channels}. Skipping packet.")
-             return
-
 
         # --- Get PER-STREAM filter state ---
         drift_filter = stream.drift_filter
@@ -472,10 +417,7 @@ async def _stream_async(
     def _on_data(_, data: bytearray):
         """Main data callback from Bleak."""
         ts = get_utc_timestamp()  # Get system timestamp once
-        # Assuming the UUID is for the main data characteristic that carries EEG/OPTICS/etc.
-        # This is a bit of a guess since the characteristic mapping is hidden, but the message
-        # format implies one data UUID for most sensors.
-        message = f"{ts}\t{MuseS.EEG_UUID}\t{data.hex()}" 
+        message = f"{ts}\t{MuseS.EEG_UUID}\t{data.hex()}"
 
         # --- Optional: Write raw data to file ---
         if raw_data_file:
@@ -485,31 +427,94 @@ async def _stream_async(
                 if verbose:
                     print(f"Error writing to raw data file: {e}")
 
-        # --- Decode all subpackets in the message ---
+        # --- Decode all subpackets in the message ---"
         subpackets = parse_message(message)
         decoded = {}
+
         for sensor_type, pkt_list in subpackets.items():
+            # Get per-sensor state, even if we haven't created an LSL outlet yet
             stream = streams.get(sensor_type)
-            if stream:
-                # 1. Get current state for this sensor
-                current_state = (
-                    stream.base_time,
-                    stream.wrap_offset,
-                    stream.last_abs_tick,
-                    stream.sample_counter,
-                )
+            if stream is None:
+                base_time = None
+                wrap_offset = 0
+                last_abs_tick = 0
+                sample_counter = 0
+            else:
+                base_time = stream.base_time
+                wrap_offset = stream.wrap_offset
+                last_abs_tick = stream.last_abs_tick
+                sample_counter = stream.sample_counter
 
-                # 2. Call make_timestamps (This creates the t=0 relative device_time)
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
-                    make_timestamps(pkt_list, *current_state)
-                )
-                decoded[sensor_type] = array
+            # Make timestamps (device-relative -> array with [device_time, ch1, ch2, ...])
+            array, base_time, wrap_offset, last_abs_tick, sample_counter = make_timestamps(
+                pkt_list, base_time, wrap_offset, last_abs_tick, sample_counter
+            )
 
-                # 3. Update state
-                stream.base_time = base_time
-                stream.wrap_offset = wrap_offset
-                stream.last_abs_tick = last_abs_tick
-                stream.sample_counter = sample_counter
+            if array.size == 0:
+                continue
+
+            # Lazily create EEG / OPTICS outlets based on actual data shape
+            if stream is None:
+                if sensor_type == "EEG":
+                    n_channels = array.shape[1] - 1  # first column is device_time
+                    eeg_labels = EEG_CHANNELS[:n_channels]
+
+                    info_eeg = StreamInfo(
+                        name="Muse_EEG",
+                        stype="EEG",
+                        n_channels=n_channels,
+                        sfreq=256.0,
+                        dtype="float32",
+                        source_id=f"{address}_eeg",
+                    )
+                    desc_eeg = info_eeg.desc
+                    desc_eeg.append_child_value("manufacturer", "Muse")
+                    desc_eeg.append_child_value("model", "MuseS")
+                    desc_eeg.append_child_value("device", client.name)
+                    channels = desc_eeg.append_child("channels")
+                    for ch_name in eeg_labels:
+                        channels.append_child("channel").append_child_value("label", ch_name)
+
+                    stream = SensorStream(outlet=StreamOutlet(info_eeg))
+                    streams["EEG"] = stream
+
+                elif sensor_type == "OPTICS":
+                    n_channels = array.shape[1] - 1
+                    optics_labels = OPTICS_CHANNELS[:n_channels]
+
+                    info_optics = StreamInfo(
+                        name="Muse_OPTICS",
+                        stype="PPG",
+                        n_channels=n_channels,
+                        sfreq=64.0,
+                        dtype="float32",
+                        source_id=f"{address}_optics",
+                    )
+                    desc_opt = info_optics.desc
+                    desc_opt.append_child_value("manufacturer", "Muse")
+                    desc_opt.append_child_value("model", "MuseS")
+                    desc_opt.append_child_value("device", client.name)
+                    channels_opt = desc_opt.append_child("channels")
+                    for ch_name in optics_labels:
+                        channels_opt.append_child("channel").append_child_value("label", ch_name)
+
+                    stream = SensorStream(outlet=StreamOutlet(info_optics))
+                    streams["OPTICS"] = stream
+
+                elif sensor_type in ("ACCGYRO", "BATTERY"):
+                    # These should already exist from _create_lsl_outlets
+                    stream = streams.get(sensor_type)
+                    if stream is None:
+                        # Safety: if for some reason they weren't created, skip
+                        continue
+
+            # Update per-stream timestamp state
+            stream.base_time = base_time
+            stream.wrap_offset = wrap_offset
+            stream.last_abs_tick = last_abs_tick
+            stream.sample_counter = sample_counter
+
+            decoded[sensor_type] = array
 
         # --- Queue Samples with Drift Correction ---
         # Get LSL clock time *once* for this entire BLE message
@@ -520,6 +525,7 @@ async def _stream_async(
         _queue_samples("ACCGYRO", decoded.get("ACCGYRO", np.empty((0, 0))), lsl_now)
         _queue_samples("OPTICS", decoded.get("OPTICS", np.empty((0, 0))), lsl_now)
         _queue_samples("BATTERY", decoded.get("BATTERY", np.empty((0, 0))), lsl_now)
+
 
         # --- Flush buffer if needed (by time OR size) ---
         # Check time interval
@@ -542,23 +548,16 @@ async def _stream_async(
     async with bleak.BleakClient(address, timeout=15.0) as client:
         if verbose:
             print(f"Connected. Device: {client.name}")
-        
+
+        # Create LSL outlets
+        streams = _create_lsl_outlets(client.name, address)
         start_time = time.monotonic()
 
-        # 1. Subscribe to data and configure device FIRST
+        # Subscribe to data and configure device
         data_callbacks = {MuseS.EEG_UUID: _on_data}
         await MuseS.connect_and_initialize(
             client, preset, data_callbacks, verbose=verbose
         )
-
-        # 2. Create LSL outlets SECOND
-        # The underlying call to MuseS.connect_and_initialize is *expected*
-        # to have updated the global channel lists (EEG_CHANNELS, OPTICS_CHANNELS)
-        # in decode.py based on the 'preset'.
-        # We now call _create_lsl_outlets AFTER the device has been configured.
-        streams = _create_lsl_outlets(client.name, address)
-        
-        # start_time is already set
 
         if verbose:
             print("Streaming data... (Press Ctrl+C to stop)")
@@ -588,7 +587,7 @@ async def _stream_async(
                 )
             )
 
-# The rest of the stream function is unchanged:
+
 def stream(
     address: str,
     preset: str = "p1041",
