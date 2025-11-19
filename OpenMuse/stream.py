@@ -452,56 +452,54 @@ async def _stream_async(
 
     def _on_data(_, data: bytearray):
         """Main data callback from Bleak."""
-        ts = get_utc_timestamp()  # Get system timestamp once
+        ts = get_utc_timestamp()
         message = f"{ts}\t{MuseS.EEG_UUID}\t{data.hex()}"
 
-        # --- Optional: Write raw data to file ---
+        # Optional raw log
         if raw_data_file:
             try:
                 raw_data_file.write(message + "\n")
-            except Exception as e:
-                if verbose:
-                    print(f"Error writing to raw data file: {e}")
+            except Exception:
+                pass
 
-        # --- Decode all subpackets in the message ---
+        # Decode subpackets
         subpackets = parse_message(message)
         decoded = {}
+
         for sensor_type, pkt_list in subpackets.items():
             stream = streams.get(sensor_type)
             if stream:
-                # 1. Get current state for this sensor
-                current_state = (
+                # unpack current timestamp state
+                state = (
                     stream.base_time,
                     stream.wrap_offset,
                     stream.last_abs_tick,
                     stream.sample_counter,
                 )
 
-                # 2. Call make_timestamps (This creates the t=0 relative device_time)
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
-                    make_timestamps(pkt_list, *current_state)
-                )
+                array, base_time, wrap_offset, last_abs_tick, sample_counter = \
+                    make_timestamps(pkt_list, *state)
+
                 decoded[sensor_type] = array
 
-                # 3. Update state
+                # store updated timestamp state
                 stream.base_time = base_time
                 stream.wrap_offset = wrap_offset
                 stream.last_abs_tick = last_abs_tick
                 stream.sample_counter = sample_counter
 
-        # --- Flush buffer if needed (by time OR size) ---
-        # Check time interval
-        time_flush = time.monotonic() - last_flush_time > FLUSH_INTERVAL
+        # Per-stream drift correction & buffering
+        lsl_now = local_clock()
+        for stype, arr in decoded.items():
+            _queue_samples(stype, arr, lsl_now)
 
-        # Check size
-        size_flush = False
-        for stream in streams.values():
-            if len(stream.buffer) > MAX_BUFFER_PACKETS:
-                size_flush = True
-                break
+        # Flush if needed
+        time_flush = time.monotonic() - last_flush_time > FLUSH_INTERVAL
+        size_flush = any(len(s.buffer) > MAX_BUFFER_PACKETS for s in streams.values())
 
         if time_flush or size_flush:
             _flush_buffer()
+
 
     # --- Main connection logic ---
     if verbose:
