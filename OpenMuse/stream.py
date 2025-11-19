@@ -489,16 +489,6 @@ async def _stream_async(
                 stream.last_abs_tick = last_abs_tick
                 stream.sample_counter = sample_counter
 
-        # --- Queue Samples with Drift Correction ---
-        # Get LSL clock time *once* for this entire BLE message
-        lsl_now = local_clock()
-
-        # Queue all decoded sensor data
-        _queue_samples("EEG", decoded.get("EEG", np.empty((0, 0))), lsl_now)
-        _queue_samples("ACCGYRO", decoded.get("ACCGYRO", np.empty((0, 0))), lsl_now)
-        _queue_samples("OPTICS", decoded.get("OPTICS", np.empty((0, 0))), lsl_now)
-        _queue_samples("BATTERY", decoded.get("BATTERY", np.empty((0, 0))), lsl_now)
-
         # --- Flush buffer if needed (by time OR size) ---
         # Check time interval
         time_flush = time.monotonic() - last_flush_time > FLUSH_INTERVAL
