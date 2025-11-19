@@ -496,9 +496,35 @@ async def _stream_async(
                 streams = _create_lsl_outlets_dynamic(client.name, address, detected_cfg)
                 lsl_initialized = True
 
+
         # --- If the LSL outlets are not initialized yet, skip queuing ---
         if not lsl_initialized:
             return
+
+        # OPTICS
+        if "OPTICS" in subpackets and subpackets["OPTICS"]:
+            if "OPTICS" not in streams:
+                from .decode import _select_optics_channels
+                n_optics = subpackets["OPTICS"][0]["n_channels"]
+                chan_labels = _select_optics_channels(n_optics)
+
+                info = StreamInfo(
+                    name="Muse_OPTICS",
+                    stype="PPG",
+                    n_channels=len(chan_labels),
+                    sfreq=64.0,
+                    dtype="float32",
+                    source_id=f"{address}_optics",
+                )
+                desc = info.desc
+                desc.append_child_value("manufacturer", "Muse")
+                desc.append_child_value("model", "MuseS")
+                desc.append_child_value("device", client.name)
+                chans = desc.append_child("channels")
+                for ch in chan_labels:
+                    chans.append_child("channel").append_child_value("label", ch)
+
+                streams["OPTICS"] = SensorStream(outlet=StreamOutlet(info))
 
         for sensor_type, pkt_list in subpackets.items():
             stream = streams.get(sensor_type)
