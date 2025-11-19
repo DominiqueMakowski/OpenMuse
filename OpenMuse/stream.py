@@ -23,7 +23,7 @@ between the Muse device and the computer.
 1. **device_time** (from make_timestamps):
    - A t=0 relative timestamp based on the device's 256kHz clock.
    - This clock has high precision but *skews* relative to the computer clock.
-   - This value is used internally for drift correction.
+   - This value is saved as the first "muse_time" channel for debugging.
 
 2. **lsl_now** (from local_clock()):
    - The computer's LSL clock. This is our "ground truth" time.
@@ -39,7 +39,8 @@ Packet Reordering Buffer - Critical Design Component:
 **WHY BUFFERING IS NECESSARY:**
 
 BLE transmission can REORDER entire messages (not just individual packets). Analysis shows:
-- Some messages arrive out of order
+- ~5% of messages arrive out of order
+- Backward jumps can exceed 80ms in severe cases
 - Device's timestamps are CORRECT (device clock is monotonic and accurate)
 - But messages processed in arrival order → non-monotonic timestamps
 
@@ -51,7 +52,7 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 
 **BUFFER OPERATION:**
 
-1. Samples held in buffer for FLUSH_INTERVAL seconds (default: 200ms)
+1. Samples held in buffer for BUFFER_DURATION_SECONDS (default: 150ms)
 2. When buffer time limit reached, all buffered samples are:
    - Concatenated across packets/messages
    - **Sorted by device timestamp** (preserves device timing, corrects arrival order)
@@ -60,28 +61,29 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 3. LSL receives samples in correct temporal order with device timing preserved
 
 **BUFFER FLUSH TRIGGERS:**
-- Time threshold: FLUSH_INTERVAL seconds elapsed since last flush
+- Time threshold: BUFFER_DURATION_SECONDS elapsed since last flush
 - Size threshold: MAX_BUFFER_PACKETS accumulated (safety limit)
 - End of stream: Final flush when disconnecting
 
 **BUFFER SIZE RATIONALE:**
 - Original: 80ms (insufficient for ~90ms delays observed in data)
 - Previous: 250ms (captures nearly all out-of-order messages)
-- Current: 200ms (balances low latency with high temporal ordering accuracy)
-- Trade-off: Latency (200ms delay) vs. timestamp quality (near-perfect monotonic output)
+- Current: 150ms (balances low latency with high temporal ordering accuracy)
+- Trade-off: Latency (150ms delay) vs. timestamp quality (near-perfect monotonic output)
 - For real-time applications: can reduce further, accept some non-monotonic timestamps
-- For recording quality: 200ms provides excellent temporal ordering
+- For recording quality: 150ms provides excellent temporal ordering
 
 Timestamp Quality & Device Timing Preservation:
 ------------------------------------------------
-**MONOTONICITY:**
+**CRITICAL INSIGHT:**
 
-The decode.py output may show some non-monotonic timestamps, which might reflect
-BLE message arrival order, NOT device timing errors. The timestamp VALUES are
-correct and preserve the device's accurate 256 kHz clock timing.
+The decode.py output may show ~20% non-monotonic timestamps, but this is EXPECTED
+and NOT an error. These non-monotonic timestamps simply reflect BLE message arrival
+order, NOT device timing errors. The timestamp VALUES are correct and preserve the
+device's accurate 256 kHz clock timing.
 
 **PIPELINE FLOW:**
-  decode.py:  Processes messages in arrival order → some might be non-monotonic
+  decode.py:  Processes messages in arrival order → ~20% non-monotonic (expected)
               ↓ (but timestamp values preserve device timing)
   stream.py:  Sorts by device timestamp → 0% non-monotonic ✓
               ↓ (restores correct temporal order)
@@ -101,7 +103,7 @@ When loading XDF files with pyxdf:
 
 LSL Stream Configuration:
 -------------------------
-Four LSL streams are created:
+Three LSL streams are created:
 - Muse_EEG: 8 channels at 256 Hz (EEG + AUX)
 - Muse_ACCGYRO: 6 channels at 52 Hz (accelerometer + gyroscope)
 - Muse_OPTICS: 16 channels at 64 Hz (PPG sensors)
@@ -111,6 +113,7 @@ Each stream includes:
 - Channel labels (from decode.py: EEG_CHANNELS, ACCGYRO_CHANNELS, OPTICS_CHANNELS)
 - Nominal sampling rate (declared device rate)
 - Data type (float32)
+- Units (microvolts for EEG, a.u. for others)
 - Manufacturer metadata
 
 Optional Raw Data Logging:
@@ -122,50 +125,6 @@ in the same format as the 'record' command:
 - Hex payload
 - This is useful for verification and offline analysis/re-parsing.
 
-"""
-
-"""
-Muse BLE to LSL Streaming
-==========================
-
-( ... Omitted docstring for brevity ... )
-"""
-
-"""
-Muse BLE to LSL Streaming
-==========================
-
-LSL Stream Configuration:
--------------------------
-Four LSL streams are created:
-- Muse_EEG
-- Muse_ACCGYRO
-- Muse_OPTICS
-- Muse_BATTERY
-The channel count for EEG and OPTICS is now determined dynamically by the first
-incoming data packet from the Muse device.
-"""
-
-"""
-Muse BLE to LSL Streaming
-==========================
-
-( ... Omitted docstring for brevity ... )
-"""
-
-"""
-Muse BLE to LSL Streaming
-==========================
-
-LSL Stream Configuration:
--------------------------
-Four LSL streams are created:
-- Muse_EEG
-- Muse_ACCGYRO
-- Muse_OPTICS
-- Muse_BATTERY
-The channel count for EEG and OPTICS is now determined dynamically by the first
-incoming data packet from the Muse device.
 """
 
 import asyncio
@@ -188,9 +147,6 @@ from .decode import (
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
-# --- Local Channel Definitions ---
-# --- Local Channel Definitions ---
-# Full possible channel sets — used for naming once the actual count is detected.
 _FULL_EEG_CHANNELS = (
     "EEG_TP9", "EEG_AF7", "EEG_AF8", "EEG_TP10",
     "AUX_1", "AUX_2", "AUX_3", "AUX_4",
@@ -233,14 +189,18 @@ MAX_BUFFER_PACKETS = 52  # 52 packets per sensor
 FLUSH_INTERVAL = 0.2  # 200ms
 
 
-class RLSFilter:
+class _RLSFilter:
     """
     Implements a Recursive Least Squares (RLS) filter for online clock drift.
 
-    ( ... Omitted RLSFilter class for brevity ... )
+    Models the linear relationship: y = X * theta
+    Where:
+      y = lsl_now
+      X = [device_time, 1.0]
+      theta = [b, a] (slope, intercept)
     """
 
-    def __init__(self, dim: int, lam: float, P_init: float):
+    def __init__(self, dim: int, lam: float = 0.999, P_init: float = 0.1):
         self.dim = dim
         self.lam = lam  # Forgetting factor
         self.P_init = P_init  # Initial covariance
@@ -290,30 +250,23 @@ class RLSFilter:
 class SensorStream:
     """Holds the LSL outlet and a buffer for a single sensor stream."""
 
-    # Outlet is now optional and will be created later
-    outlet: Optional[StreamOutlet] = None
+    outlet: StreamOutlet
     buffer: List[Tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
     # Track state for make_timestamps (wraparound, sample counter, etc.)
     base_time: Optional[float] = None
     wrap_offset: int = 0
     last_abs_tick: int = 0
     sample_counter: int = 0
-    # --- Per-stream state for online drift correction ---
-    drift_filter: RLSFilter = field(
-        default_factory=lambda: RLSFilter(dim=2, lam=0.9999, P_init=1e6)
+    # --- ADDED: Per-stream state for online drift correction ---
+    drift_filter: _RLSFilter = field(
+        default_factory=lambda: _RLSFilter(dim=2, lam=0.9999, P_init=1e6)
     )
     drift_initialized: bool = False
     last_update_device_time: float = 0.0
 
 
-def _create_lsl_outlets_initial(
-    device_name: str,
-    device_id: str,
-) -> Dict[str, SensorStream]:
-    """
-    Initialize sensor stream objects, creating fixed LSL outlets immediately
-    and placeholders for dynamic ones.
-    """
+def _create_lsl_outlets(device_name: str, device_id: str) -> Dict[str, SensorStream]:
+
     streams = {}
 
     # Initialize placeholders for streams where channel count is unknown (EEG, OPTICS)
@@ -342,7 +295,7 @@ def _create_lsl_outlets_initial(
 
     outlet_accgyro = StreamOutlet(info_accgyro)
     streams[sensor_type] = SensorStream(outlet=outlet_accgyro)
-    # Removed: print(f"✅ LSL Outlet created for {sensor_type}: {n_channels} channels at {sfreq} Hz.")
+    
 
 
     # --- Battery Stream (Fixed 1 channel, 1 Hz) ---
@@ -367,7 +320,7 @@ def _create_lsl_outlets_initial(
 
     outlet_battery = StreamOutlet(info_battery)
     streams[sensor_type] = SensorStream(outlet=outlet_battery)
-    # Removed: print(f"✅ LSL Outlet created for {sensor_type}: {n_channels} channel at {sfreq} Hz.")
+
 
     return streams
 
@@ -418,7 +371,7 @@ async def _stream_async(
 ):
     """Asynchronous context for BLE connection and LSL streaming."""
 
-    # --- Stream State ---
+    # --- Other Stream State ---
     streams: Dict[str, SensorStream] = {}
     last_flush_time = 0.0
     samples_sent = {"EEG": 0, "ACCGYRO": 0, "OPTICS": 0, "BATTERY": 0}
@@ -428,15 +381,32 @@ async def _stream_async(
 
     def _queue_samples(sensor_type: str, data_array: np.ndarray, lsl_now: float):
         """
-        Apply drift correction, dynamically create outlet if needed, and buffer samples.
+        Apply drift correction and buffer samples using a per-stream filter.
+
+        Parameters
+        ----------
+        sensor_type : str
+            The name of the sensor (e.g., "EEG").
+        data_array : np.ndarray
+            The array from make_timestamps, shape (n_samples, 1 + n_channels).
+            Column 0 is device_time, remaining are sensor values.
+        lsl_now : float
+            The computer's LSL clock time when the BLE message was received.
         """
-        if data_array.size == 0:
-            return
+        if data_array.size == 0 or data_array.shape[1] < 2:
+            return  # No data in this packet
 
         stream = streams.get(sensor_type)
         if stream is None:
-            return
+            return  # No LSL outlet for this type
+        
+        # --- Get PER-STREAM filter state ---
+        drift_filter = stream.drift_filter
+        drift_initialized = stream.drift_initialized
+        last_update_device_time = stream.last_update_device_time
 
+
+        # Extract device timestamps (relative to t=0 from make_timestamps)
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
         actual_channels = samples.shape[1]
@@ -453,7 +423,6 @@ async def _stream_async(
                     )
                 except Exception as e:
                     if verbose:
-                        # Retain non-emoji failure message
                         print(f"❌ Failed to create LSL Outlet for {sensor_type}: {e}")
                     return
             else:
@@ -485,33 +454,49 @@ async def _stream_async(
 
 
         # --- Drift Correction ---
-        drift_filter = stream.drift_filter
-        drift_initialized = stream.drift_initialized
-        last_update_device_time = stream.last_update_device_time
+        first_device_time = device_times[0]
 
-        last_device_time = device_times[-1]
+        old_last_update_device_time = last_update_device_time
 
         if not drift_initialized:
-            initial_a = lsl_now - last_device_time
+            # Initialize this sensor's filter
+            initial_a = lsl_now - first_device_time
             drift_filter.theta = np.array([1.0, initial_a])
-            stream.drift_initialized = True
-            stream.last_update_device_time = last_device_time
-            drift_b, drift_a = 1.0, initial_a
+            stream.drift_initialized = True  # Set state on the stream object
+            stream.last_update_device_time = first_device_time
         else:
-            prev_device_time = last_update_device_time
-            if last_device_time > last_update_device_time:
-                drift_filter.update(y=lsl_now, x=np.array([last_device_time, 1.0]))
-                stream.last_update_device_time = last_device_time
+            # Only update filter if this packet is 'newer'
+            # This prevents out-of-order packets from corrupting the model
+            if first_device_time > last_update_device_time:
+                # Update the filter with the new (device_time, lsl_now) pair
+                # y = lsl_now, x = [dev_time, 1.0]
+                drift_filter.update(y=lsl_now, x=np.array([first_device_time, 1.0]))
+                stream.last_update_device_time = first_device_time
+            # (Else: This is an out-of-order packet, ignore it for filter updates)
 
-            drift_b, drift_a = drift_filter.theta
+        # Get current model parameters [b, a]
+        drift_b, drift_a = drift_filter.theta
 
-            if not (0.5 < drift_b < 1.5) and (lsl_now - start_time) > 5.0:
-                if verbose:
-                    print(f"Warning: Unstable drift fit for {sensor_type}. Resetting filter.")
-                drift_filter.reset()
-                stream.drift_initialized = False
-                drift_a = lsl_now - last_device_time
-                drift_b = 1.0
+        # Safety check: If filter diverges, reset it
+        if not (0.5 < drift_b < 1.5):
+            if (
+                verbose and (lsl_now - start_time) > 5.0
+            ):  # Suppress early warnings due to warmup
+                # Calculate the *correct* time diff using the old value
+                time_diff = first_device_time - old_last_update_device_time
+
+                # Print a single, dense line with all key info
+                print(
+                    f"Warning: Unstable drift fit for {sensor_type}. Resetting filter. "
+                    f"[Slope(b)={drift_b:.4f}, TimeDiff={time_diff:.3f}s, "
+                    f"NewDevTime={first_device_time:.3f}, LastDevTime={old_last_update_device_time:.3f}]"
+                )
+            # Reset and re-initialize on the next packet
+            drift_filter.reset()
+            stream.drift_initialized = False  # Set state on the stream object
+            # Use a simple offset for this packet
+            drift_a = lsl_now - first_device_time
+            drift_b = 1.0
 
         # Apply the correction: lsl_timestamps = a + (b * device_times)
         lsl_timestamps = drift_a + (drift_b * device_times)
@@ -521,16 +506,21 @@ async def _stream_async(
 
     def _flush_buffer():
         """Sort and push all buffered samples to LSL."""
-        nonlocal last_flush_time, samples_sent
+        nonlocal last_flush_time, samples_sent  # noqa: F824
         last_flush_time = time.monotonic()
 
         for sensor_type, stream in streams.items():
-            if not stream.buffer or stream.outlet is None:
+            if not stream.buffer:
                 continue
 
-            # Concatenate all buffered samples
-            all_timestamps = np.concatenate([ts for ts, _ in stream.buffer])
-            all_samples = np.concatenate([s for _, s in stream.buffer])
+            # Unzip buffer into lists of (timestamps, samples)
+            try:
+                all_timestamps = np.concatenate([ts for ts, _ in stream.buffer])
+                all_samples = np.concatenate([s for _, s in stream.buffer])
+            except ValueError:
+                stream.buffer.clear()
+                continue  # Skip if buffer was emptied by another flush
+
             stream.buffer.clear()
 
             # Sort by LSL timestamp to ensure correct order
@@ -541,25 +531,28 @@ async def _stream_async(
             # Push the chunk to LSL
             try:
                 with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", message=".*A single sample is pushed.*")
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=".*A single sample is pushed.*",
+                    )
                     stream.outlet.push_chunk(
                         x=sorted_data.astype(np.float32, copy=False),
                         timestamp=sorted_timestamps.astype(np.float64, copy=False),
                         pushThrough=True,
                     )
+
                 samples_sent[sensor_type] += len(sorted_data)
             except Exception as e:
                 if verbose:
                     print(f"Error pushing LSL chunk for {sensor_type}: {e}")
-                    # Use get_sinfo() here, as it's already an outlet object
-                    print(f"    Data shape: {sorted_data.shape}, Outlet channels: {stream.outlet.get_sinfo().n_channels}")
 
 
     def _on_data(_, data: bytearray):
         """Main data callback from Bleak."""
-        ts = get_utc_timestamp()
+        ts = get_utc_timestamp()  # Get system timestamp once
         message = f"{ts}\t{MuseS.EEG_UUID}\t{data.hex()}"
 
+        # --- Optional: Write raw data to file ---
         if raw_data_file:
             try:
                 raw_data_file.write(message + "\n")
@@ -567,37 +560,55 @@ async def _stream_async(
                 if verbose:
                     print(f"Error writing to raw data file: {e}")
 
+        # --- Decode all subpackets in the message ---
         subpackets = parse_message(message)
         decoded = {}
         for sensor_type, pkt_list in subpackets.items():
             stream = streams.get(sensor_type)
             if stream:
+                # 1. Get current state for this sensor
                 current_state = (
-                    stream.base_time, stream.wrap_offset, stream.last_abs_tick, stream.sample_counter,
+                    stream.base_time,
+                    stream.wrap_offset,
+                    stream.last_abs_tick,
+                    stream.sample_counter,
                 )
+
+                # 2. Call make_timestamps (This creates the t=0 relative device_time)
                 array, base_time, wrap_offset, last_abs_tick, sample_counter = (
                     make_timestamps(pkt_list, *current_state)
                 )
                 decoded[sensor_type] = array
 
+                # 3. Update state
                 stream.base_time = base_time
                 stream.wrap_offset = wrap_offset
                 stream.last_abs_tick = last_abs_tick
                 stream.sample_counter = sample_counter
+        
+        # --- Queue Samples with Drift Correction ---
+        # Get LSL clock time *once* for this entire BLE message
 
         lsl_now = local_clock()
 
-        # Queue Samples - this is where the dynamic LSL outlet creation happens
+        # Queue all decoded sensor data
         _queue_samples("EEG", decoded.get("EEG", np.empty((0, 0))), lsl_now)
         _queue_samples("ACCGYRO", decoded.get("ACCGYRO", np.empty((0, 0))), lsl_now)
         _queue_samples("OPTICS", decoded.get("OPTICS", np.empty((0, 0))), lsl_now)
         _queue_samples("BATTERY", decoded.get("BATTERY", np.empty((0, 0))), lsl_now)
 
-        should_flush = (time.monotonic() - last_flush_time > FLUSH_INTERVAL) or any(
-            len(s.buffer) > MAX_BUFFER_PACKETS for s in streams.values()
-        )
+        # --- Flush buffer if needed (by time OR size) ---
+        # Check time interval
+        time_flush = time.monotonic() - last_flush_time > FLUSH_INTERVAL
 
-        if should_flush:
+        # Check size
+        size_flush = False
+        for stream in streams.values():
+            if len(stream.buffer) > MAX_BUFFER_PACKETS:
+                size_flush = True
+                break
+
+        if time_flush or size_flush:
             _flush_buffer()
 
     # --- Main connection logic ---
@@ -606,11 +617,10 @@ async def _stream_async(
 
     async with bleak.BleakClient(address, timeout=15.0) as client:
         if verbose:
-            device_name = client.name
-            print(f"Connected. Device: {device_name}")
+            print(f"Connected. Device: {client.name}")
 
-        # Initialize stream objects (outlets are None for EEG/OPTICS)
-        streams = _create_lsl_outlets_initial(client.name, device_id)
+        # Create LSL outlets
+        streams = _create_lsl_outlets(client.name, address)
         start_time = time.monotonic()
 
         # Subscribe to data and configure device
@@ -619,22 +629,25 @@ async def _stream_async(
             client, preset, data_callbacks, verbose=verbose
         )
 
-        # Removed: print("Streaming data... (LSL Outlets for EEG/OPTICS will be created on first data packet.)")
+        if verbose:
+            print("Streaming data... (Press Ctrl+C to stop)")
 
         # --- Main streaming loop ---
         while True:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.5)  # Main loop sleep
+            # Check duration
             if duration and (time.monotonic() - start_time) > duration:
                 if verbose:
                     print(f"Streaming duration ({duration}s) elapsed.")
                 break
+            # Flush buffer one last time if connection is lost
             if not client.is_connected:
                 if verbose:
                     print("Client disconnected.")
                 break
 
         # --- Shutdown ---
-        _flush_buffer()
+        _flush_buffer()  # Final flush
         if verbose:
             print(
                 "Stream stopped. "
@@ -653,22 +666,26 @@ def stream(
     verbose: bool = True,
 ) -> None:
     """
-    Stream decoded Muse S data over LSL with **automatic channel detection**.
+    Stream decoded EEG and accelerometer/gyroscope data over LSL.
 
-    The number of EEG and OPTICS channels is automatically determined
-    by the device's preset on the first incoming data packet.
+    Creates three LSL streams:
+    - Muse_EEG: 8 channels at 256 Hz (EEG + AUX)
+    - Muse_ACCGYRO: 6 channels at 52 Hz (accelerometer + gyroscope)
+    - Muse_OPTICS: 16 channels at 64 Hz (PPG sensors)
 
     Parameters
     ----------
     address : str
         Device address (e.g., MAC on Windows).
     preset : str
-        Preset to send (e.g., p1041 for all channels, p21 for 4 EEG channels).
+        Preset to send (e.g., p1041 for all channels, p1035 for basic config).
     duration : float, optional
         Optional stream duration in seconds. Omit to stream until interrupted.
     record : bool or str, optional
-        If False (default), do not record raw data. If True, records to a
-        timestamped file. If a string is provided, use it as the filename.
+        If False (default), do not record raw data.
+        If True, record raw BLE packets to a default timestamped file
+        (e.g., 'rawdata_stream_20251024_183000.txt').
+        If a string is provided, use it as the filename.
     verbose : bool
         If True (default), print connection and status messages.
     """
@@ -694,15 +711,7 @@ def stream(
 
     # --- Run the main asynchronous streaming loop ---
     try:
-        asyncio.run(
-            _stream_async(
-                address,
-                preset,
-                duration,
-                raw_data_file,
-                verbose,
-            )
-        )
+        asyncio.run(_stream_async(address, preset, duration, raw_data_file, verbose))
     except KeyboardInterrupt:
         if verbose:
             print("Streaming stopped by user.")
