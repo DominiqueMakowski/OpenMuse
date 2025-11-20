@@ -150,7 +150,6 @@ from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
 MAX_BUFFER_PACKETS = 52  # 52 packets per sensor
 
-
 class _RLSFilter:
     """
     Implements a Recursive Least Squares (RLS) filter for online clock drift.
@@ -207,7 +206,6 @@ class _RLSFilter:
         # apply forgetting factor
         self.P /= self.lam
 
-
 @dataclass
 class SensorStream:
     """Holds the LSL outlet and a buffer for a single sensor stream."""
@@ -226,8 +224,6 @@ class SensorStream:
     drift_initialized: bool = False
     last_update_device_time: float = 0.0
 
-
-
 def _create_lsl_outlets_dynamic(device_name: str, device_id: str, detected_cfg: dict):
     """
     Create LSL outlets using dynamically detected EEG/OPTICS channel counts.
@@ -236,7 +232,7 @@ def _create_lsl_outlets_dynamic(device_name: str, device_id: str, detected_cfg: 
     """
     streams = {}
 
-    # ------------ EEG ------------
+    # --- EEG Stream ---
     if detected_cfg["eeg_nch"] > 0:
         from .decode import _select_eeg_channels
         chan_labels = _select_eeg_channels(detected_cfg["eeg_nch"])
@@ -259,7 +255,7 @@ def _create_lsl_outlets_dynamic(device_name: str, device_id: str, detected_cfg: 
 
         streams["EEG"] = SensorStream(outlet=StreamOutlet(info))
 
-    # ------------ ACCGYRO (always 6ch) ------------
+    # --- ACCGYRO Stream ---
     from .decode import ACCGYRO_CHANNELS
     info = StreamInfo(
         name="Muse_ACCGYRO",
@@ -278,7 +274,7 @@ def _create_lsl_outlets_dynamic(device_name: str, device_id: str, detected_cfg: 
         chans.append_child("channel").append_child_value("label", ch)
     streams["ACCGYRO"] = SensorStream(outlet=StreamOutlet(info))
 
-    # ------------ OPTICS ------------
+    # --- OPTICS Stream ---
     if detected_cfg["optics_nch"] > 0:
         from .decode import _select_optics_channels
         chan_labels = _select_optics_channels(detected_cfg["optics_nch"])
@@ -301,7 +297,7 @@ def _create_lsl_outlets_dynamic(device_name: str, device_id: str, detected_cfg: 
 
         streams["OPTICS"] = SensorStream(outlet=StreamOutlet(info))
 
-    # ------------ BATTERY ------------
+    # --- BATTERY Stream ---
     from .decode import BATTERY_CHANNELS
     info = StreamInfo(
         name="Muse_BATTERY",
@@ -323,7 +319,6 @@ def _create_lsl_outlets_dynamic(device_name: str, device_id: str, detected_cfg: 
 
     return streams
 
-
 async def _stream_async(
     address: str,
     preset: str,
@@ -333,7 +328,7 @@ async def _stream_async(
 ):
     """Asynchronous context for BLE connection and LSL streaming."""
 
-    # Dynamic stream creation support:
+    # Dynamic stream creation support
     streams = {}
     lsl_initialized = False
     detected_cfg = {"eeg_nch": 0, "optics_nch": 0}
@@ -496,53 +491,9 @@ async def _stream_async(
                 streams = _create_lsl_outlets_dynamic(client.name, address, detected_cfg)
                 lsl_initialized = True
 
-
         # --- If the LSL outlets are not initialized yet, skip queuing ---
         if not lsl_initialized:
             return
-
-        # OPTICS
-        if "OPTICS" in subpackets and subpackets["OPTICS"]:
-            if "OPTICS" not in streams:
-                from .decode import _select_optics_channels
-                n_optics = subpackets["OPTICS"][0]["n_channels"]
-                chan_labels = _select_optics_channels(n_optics)
-
-                info = StreamInfo(
-                    name="Muse_OPTICS",
-                    stype="PPG",
-                    n_channels=len(chan_labels),
-                    sfreq=64.0,
-                    dtype="float32",
-                    source_id=f"{address}_optics",
-                )
-                desc = info.desc
-                desc.append_child_value("manufacturer", "Muse")
-                desc.append_child_value("model", "MuseS")
-                desc.append_child_value("device", client.name)
-                chans = desc.append_child("channels")
-                for ch in chan_labels:
-                    chans.append_child("channel").append_child_value("label", ch)
-
-                streams["OPTICS"] = SensorStream(outlet=StreamOutlet(info))
-
-        for sensor_type, pkt_list in subpackets.items():
-            stream = streams.get(sensor_type)
-            if stream:
-                current_state = (
-                    stream.base_time,
-                    stream.wrap_offset,
-                    stream.last_abs_tick,
-                    stream.sample_counter,
-                )
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
-                    make_timestamps(pkt_list, *current_state)
-                )
-                decoded[sensor_type] = array
-                stream.base_time = base_time
-                stream.wrap_offset = wrap_offset
-                stream.last_abs_tick = last_abs_tick
-                stream.sample_counter = sample_counter
 
         # --- Queue Samples with Drift Correction ---
         lsl_now = local_clock()
@@ -561,7 +512,6 @@ async def _stream_async(
 
         if time_flush or size_flush:
             _flush_buffer()
-
 
     # --- Main connection logic ---
     if verbose:
@@ -607,7 +557,6 @@ async def _stream_async(
                     for sensor, count in samples_sent.items()
                 )
             )
-
 
 def stream(
     address: str,
