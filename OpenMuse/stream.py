@@ -535,14 +535,40 @@ async def _stream_async(
         if time_flush or size_flush:
             _flush_buffer()
 
-    # --- Main connection logic ---
+# --- Main connection logic ---
     if verbose:
         print(f"Connecting to {address}...")
 
-    async with bleak.BleakClient(address, timeout=15.0) as client:
-        if verbose:
-            print(f"Connected. Device: {client.name}")
+    # --- ADDED: Retry logic for transient BLE connection errors ---
+    max_retries = 3
+    retry_delay = 2.0
+    
+    client = None
+    
+    for attempt in range(max_retries):
+        try:
+            client = bleak.BleakClient(address, timeout=15.0)
+            await client.connect()
+            if verbose:
+                print(f"Connected on attempt {attempt + 1}. Device: {client.name}")
+            break  # Connection successful, exit retry loop
+        except bleak.BleakError as e:
+            if verbose:
+                print(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                if verbose:
+                    print(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                raise  # Raise the last error if all attempts fail
+        except Exception as e:
+            # Catch other unexpected errors during connection attempt
+            if verbose:
+                print(f"Unexpected error during connection: {e}")
+            raise # Re-raise unexpected errors
 
+    # --- Streaming block now uses the connected 'client' object ---
+    try:
         # Create LSL outlets
         streams = _create_lsl_outlets(client.name, address, preset)
         start_time = time.monotonic()
@@ -570,6 +596,11 @@ async def _stream_async(
                     print("Client disconnected.")
                 break
 
+    finally:
+        # ADDED: Explicitly disconnect the client upon exit
+        if client and client.is_connected:
+            await client.disconnect()
+            
         # --- Shutdown ---
         _flush_buffer()  # Final flush
         if verbose:
