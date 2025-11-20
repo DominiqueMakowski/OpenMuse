@@ -228,37 +228,40 @@ class SensorStream:
     drift_initialized: bool = False
     last_update_device_time: float = 0.0
 
+
 def _create_lsl_outlets(
     device_name: str,
     device_id: str,
-    # ADDED: Dynamic channel lists from the active preset
-    eeg_channels: List[str] = EEG_CHANNELS,
-    optics_channels: List[str] = OPTICS_CHANNELS,
+    eeg_n_channels: int,      # <--- ADDED
+    optics_n_channels: int,   # <--- ADDED
 ) -> Dict[str, SensorStream]:
     """Create all LSL outlets for the available sensor streams."""
     streams = {}
+
+    # 1. Dynamically get channel labels from decode.py functions
+    from .decode import _select_eeg_channels, _select_optics_channels
+    eeg_channels_list = _select_eeg_channels(eeg_n_channels)
+    optics_channels_list = _select_optics_channels(optics_n_channels)
 
     # --- EEG Stream ---
     info_eeg = StreamInfo(
         name=f"Muse_EEG",
         stype="EEG",
-        # Use the dynamic list's length
-        n_channels=len(eeg_channels),
+        n_channels=len(eeg_channels_list),  # <-- NO LONGER HARDCODED
         sfreq=256.0,
         dtype="float32",
         source_id=f"{device_id}_eeg",
     )
-    desc_eeg = info_eeg.desc # <-- Access as attribute (no parentheses)
+    desc_eeg = info_eeg.desc
     desc_eeg.append_child_value("manufacturer", "Muse")
     desc_eeg.append_child_value("model", "MuseS")
     desc_eeg.append_child_value("device", device_name)
     channels = desc_eeg.append_child("channels")
-    # Iterate over the dynamic list
-    for ch_name in eeg_channels:
+    for ch_name in eeg_channels_list:
         channels.append_child("channel").append_child_value("label", ch_name)
     streams["EEG"] = SensorStream(outlet=StreamOutlet(info_eeg))
 
-    # --- ACCGYRO Stream --- (UNCHANGED as its channel list is assumed constant)
+    # --- ACCGYRO Stream (Remains constant) ---
     info_accgyro = StreamInfo(
         name=f"Muse_ACCGYRO",
         stype="ACC_GYRO",
@@ -280,8 +283,7 @@ def _create_lsl_outlets(
     info_optics = StreamInfo(
         name=f"Muse_OPTICS",
         stype="PPG",
-        # Use the dynamic list's length
-        n_channels=len(optics_channels),
+        n_channels=len(optics_channels_list), # <-- NO LONGER HARDCODED
         sfreq=64.0,
         dtype="float32",
         source_id=f"{device_id}_optics",
@@ -291,12 +293,11 @@ def _create_lsl_outlets(
     desc_opt.append_child_value("model", "MuseS")
     desc_opt.append_child_value("device", device_name)
     channels_opt = desc_opt.append_child("channels")
-    # Iterate over the dynamic list
-    for ch_name in optics_channels:
+    for ch_name in optics_channels_list:
         channels_opt.append_child("channel").append_child_value("label", ch_name)
     streams["OPTICS"] = SensorStream(outlet=StreamOutlet(info_optics))
 
-    # --- Battery Stream --- (UNCHANGED)
+    # --- Battery Stream (Remains constant) ---
     info_battery = StreamInfo(
         name=f"Muse_BATTERY",
         stype="Battery",
@@ -315,6 +316,7 @@ def _create_lsl_outlets(
     streams["BATTERY"] = SensorStream(outlet=StreamOutlet(info_battery))
 
     return streams
+
 
 async def _stream_async(
     address: str,
@@ -526,51 +528,21 @@ async def _stream_async(
             print(f"Connected. Device: {client.name}")
 
         # Create LSL outlets
-        streams = _create_lsl_outlets(client.name, address)
-        start_time = time.monotonic()
-
-        # Subscribe to data and configure device
-# ORIGINAL:
-#         # Subscribe to data and configure device
-#         data_callbacks = {MuseS.EEG_UUID: _on_data}
-#         await MuseS.connect_and_initialize(
-#             client, preset, data_callbacks, verbose=verbose
-#         )
-# 
-#         # Create LSL outlets (streams uses the hard-coded globals)
-#         streams = _create_lsl_outlets(client.name, address)
-#         start_time = time.monotonic()
-
-# MODIFIED code block inside _stream_async:
-
-        # Subscribe to data and configure device
-        data_callbacks = {MuseS.EEG_UUID: _on_data}
-
-        # ASSUMPTION: The external function has been modified to return a dict...
-        channel_config = await MuseS.connect_and_initialize(
-            client, preset, data_callbacks, verbose=verbose
-        )
-
-        # *** The FIX: Ensure channel_config is a dictionary if None was returned ***
-        channel_config = channel_config or {}
-        # **************************************************************************
-
-        # Get the active channel lists, falling back to full default lists...
-        eeg_channels = channel_config.get("EEG", EEG_CHANNELS)
-        optics_channels = channel_config.get("OPTICS", OPTICS_CHANNELS)
-        
-        # ... (rest of the function continues)
-
-        # Create LSL outlets, passing the determined channel lists
+        # Create LSL outlets using the maximum possible channel configuration
         streams = _create_lsl_outlets(
             client.name, 
             address, 
-            eeg_channels=eeg_channels, 
-            optics_channels=optics_channels
+            eeg_n_channels=8, 
+            optics_n_channels=16
         )
-        # *** End of minimal surgical change ***
-        
         start_time = time.monotonic()
+        start_time = time.monotonic()
+
+        # Subscribe to data and configure device
+        data_callbacks = {MuseS.EEG_UUID: _on_data}
+        await MuseS.connect_and_initialize(
+            client, preset, data_callbacks, verbose=verbose
+        )
 
         if verbose:
             print("Streaming data... (Press Ctrl+C to stop)")
