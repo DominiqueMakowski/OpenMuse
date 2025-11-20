@@ -541,22 +541,25 @@ async def _stream_async(
 #         streams = _create_lsl_outlets(client.name, address)
 #         start_time = time.monotonic()
 
-# MODIFIED (Requires MuseS.connect_and_initialize to return a dict of active channels):
+# MODIFIED code block inside _stream_async:
+
         # Subscribe to data and configure device
         data_callbacks = {MuseS.EEG_UUID: _on_data}
 
-        # *** The minimal surgical change ***
-        # ASSUMPTION: The external function has been modified to return a dict 
-        # like {'EEG': ['TP9', 'AF7', 'AF8', 'TP10'], 'OPTICS': ['PPG1', ...]}
-        # If the preset only enables 4 EEG channels, the returned list will only have 4.
+        # ASSUMPTION: The external function has been modified to return a dict...
         channel_config = await MuseS.connect_and_initialize(
             client, preset, data_callbacks, verbose=verbose
         )
 
-        # Get the active channel lists, falling back to full default lists if the 
-        # external function returns None or doesn't include the sensor type.
+        # *** The FIX: Ensure channel_config is a dictionary if None was returned ***
+        channel_config = channel_config or {}
+        # **************************************************************************
+
+        # Get the active channel lists, falling back to full default lists...
         eeg_channels = channel_config.get("EEG", EEG_CHANNELS)
         optics_channels = channel_config.get("OPTICS", OPTICS_CHANNELS)
+        
+        # ... (rest of the function continues)
 
         # Create LSL outlets, passing the determined channel lists
         streams = _create_lsl_outlets(
