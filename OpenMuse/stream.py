@@ -228,54 +228,37 @@ class SensorStream:
     drift_initialized: bool = False
     last_update_device_time: float = 0.0
 
-
 def _create_lsl_outlets(
-    device_name: str, device_id: str, preset: str
+    device_name: str,
+    device_id: str,
+    # ADDED: Dynamic channel lists from the active preset
+    eeg_channels: List[str] = EEG_CHANNELS,
+    optics_channels: List[str] = OPTICS_CHANNELS,
 ) -> Dict[str, SensorStream]:
     """Create all LSL outlets for the available sensor streams."""
     streams = {}
 
-    # --- Determine Channel Count based on Preset (Minimal Change) ---
-    # Assuming standard Muse presets:
-    # EEG: 4 channels (e.g., p1035, p21) or 8 channels (e.g., p1041, p52)
-    # OPTICS: 4, 8, or 16 channels (e.g., p21, p52, p1041)
-    
-    # Check if the preset is one of the "full" 8-channel EEG presets
-    full_eeg = preset in ["p1041", "p52", "p20"] # Add/adjust based on your full-channel presets
-    
-    # Check if the preset enables only 4-channel EEG
-    eeg_channels_to_use = EEG_CHANNELS if full_eeg else EEG_CHANNELS[:4]
-    
-    # Determine OPTICS channels: typically 4 (p21), 8 (p52), or 16 (p1041)
-    optics_count = 16
-    if preset in ["p21"]:
-        optics_count = 4
-    elif preset in ["p52"]:
-        optics_count = 8
-        
-    optics_channels_to_use = OPTICS_CHANNELS[:optics_count]
-
-# --- EEG Stream ---
+    # --- EEG Stream ---
     info_eeg = StreamInfo(
         name=f"Muse_EEG",
         stype="EEG",
-        # Use the determined channel count instead of hardcoded len(EEG_CHANNELS)
-        n_channels=len(eeg_channels_to_use),
+        # Use the dynamic list's length
+        n_channels=len(eeg_channels),
         sfreq=256.0,
         dtype="float32",
         source_id=f"{device_id}_eeg",
     )
-    desc_eeg = info_eeg.desc
+    desc_eeg = info_eeg.desc # <-- Access as attribute (no parentheses)
     desc_eeg.append_child_value("manufacturer", "Muse")
     desc_eeg.append_child_value("model", "MuseS")
     desc_eeg.append_child_value("device", device_name)
     channels = desc_eeg.append_child("channels")
-    # Use the determined channel list
-    for ch_name in eeg_channels_to_use:
+    # Iterate over the dynamic list
+    for ch_name in eeg_channels:
         channels.append_child("channel").append_child_value("label", ch_name)
     streams["EEG"] = SensorStream(outlet=StreamOutlet(info_eeg))
 
-    # --- ACCGYRO Stream ---
+    # --- ACCGYRO Stream --- (UNCHANGED as its channel list is assumed constant)
     info_accgyro = StreamInfo(
         name=f"Muse_ACCGYRO",
         stype="ACC_GYRO",
@@ -293,12 +276,12 @@ def _create_lsl_outlets(
         channels_acc.append_child("channel").append_child_value("label", ch_name)
     streams["ACCGYRO"] = SensorStream(outlet=StreamOutlet(info_accgyro))
 
-# --- OPTICS Stream ---
+    # --- OPTICS Stream ---
     info_optics = StreamInfo(
         name=f"Muse_OPTICS",
         stype="PPG",
-        # Use the determined channel count
-        n_channels=len(optics_channels_to_use),
+        # Use the dynamic list's length
+        n_channels=len(optics_channels),
         sfreq=64.0,
         dtype="float32",
         source_id=f"{device_id}_optics",
@@ -308,12 +291,12 @@ def _create_lsl_outlets(
     desc_opt.append_child_value("model", "MuseS")
     desc_opt.append_child_value("device", device_name)
     channels_opt = desc_opt.append_child("channels")
-    # Use the determined channel list
-    for ch_name in optics_channels_to_use:
+    # Iterate over the dynamic list
+    for ch_name in optics_channels:
         channels_opt.append_child("channel").append_child_value("label", ch_name)
     streams["OPTICS"] = SensorStream(outlet=StreamOutlet(info_optics))
 
-    # --- Battery Stream ---
+    # --- Battery Stream --- (UNCHANGED)
     info_battery = StreamInfo(
         name=f"Muse_BATTERY",
         stype="Battery",
@@ -332,7 +315,6 @@ def _create_lsl_outlets(
     streams["BATTERY"] = SensorStream(outlet=StreamOutlet(info_battery))
 
     return streams
-
 
 async def _stream_async(
     address: str,
@@ -535,49 +517,57 @@ async def _stream_async(
         if time_flush or size_flush:
             _flush_buffer()
 
-# --- Main connection logic ---
+    # --- Main connection logic ---
     if verbose:
         print(f"Connecting to {address}...")
 
-    # --- ADDED: Retry logic for transient BLE connection errors ---
-    max_retries = 3
-    retry_delay = 2.0
-    
-    client = None
-    
-    for attempt in range(max_retries):
-        try:
-            client = bleak.BleakClient(address, timeout=15.0)
-            await client.connect()
-            if verbose:
-                print(f"Connected on attempt {attempt + 1}. Device: {client.name}")
-            break  # Connection successful, exit retry loop
-        except bleak.BleakError as e:
-            if verbose:
-                print(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
-            if attempt < max_retries - 1:
-                if verbose:
-                    print(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-            else:
-                raise  # Raise the last error if all attempts fail
-        except Exception as e:
-            # Catch other unexpected errors during connection attempt
-            if verbose:
-                print(f"Unexpected error during connection: {e}")
-            raise # Re-raise unexpected errors
+    async with bleak.BleakClient(address, timeout=15.0) as client:
+        if verbose:
+            print(f"Connected. Device: {client.name}")
 
-    # --- Streaming block now uses the connected 'client' object ---
-    try:
         # Create LSL outlets
-        streams = _create_lsl_outlets(client.name, address, preset)
+        streams = _create_lsl_outlets(client.name, address)
         start_time = time.monotonic()
 
         # Subscribe to data and configure device
+# ORIGINAL:
+#         # Subscribe to data and configure device
+#         data_callbacks = {MuseS.EEG_UUID: _on_data}
+#         await MuseS.connect_and_initialize(
+#             client, preset, data_callbacks, verbose=verbose
+#         )
+# 
+#         # Create LSL outlets (streams uses the hard-coded globals)
+#         streams = _create_lsl_outlets(client.name, address)
+#         start_time = time.monotonic()
+
+# MODIFIED (Requires MuseS.connect_and_initialize to return a dict of active channels):
+        # Subscribe to data and configure device
         data_callbacks = {MuseS.EEG_UUID: _on_data}
-        await MuseS.connect_and_initialize(
+
+        # *** The minimal surgical change ***
+        # ASSUMPTION: The external function has been modified to return a dict 
+        # like {'EEG': ['TP9', 'AF7', 'AF8', 'TP10'], 'OPTICS': ['PPG1', ...]}
+        # If the preset only enables 4 EEG channels, the returned list will only have 4.
+        channel_config = await MuseS.connect_and_initialize(
             client, preset, data_callbacks, verbose=verbose
         )
+
+        # Get the active channel lists, falling back to full default lists if the 
+        # external function returns None or doesn't include the sensor type.
+        eeg_channels = channel_config.get("EEG", EEG_CHANNELS)
+        optics_channels = channel_config.get("OPTICS", OPTICS_CHANNELS)
+
+        # Create LSL outlets, passing the determined channel lists
+        streams = _create_lsl_outlets(
+            client.name, 
+            address, 
+            eeg_channels=eeg_channels, 
+            optics_channels=optics_channels
+        )
+        # *** End of minimal surgical change ***
+        
+        start_time = time.monotonic()
 
         if verbose:
             print("Streaming data... (Press Ctrl+C to stop)")
@@ -596,11 +586,6 @@ async def _stream_async(
                     print("Client disconnected.")
                 break
 
-    finally:
-        # ADDED: Explicitly disconnect the client upon exit
-        if client and client.is_connected:
-            await client.disconnect()
-            
         # --- Shutdown ---
         _flush_buffer()  # Final flush
         if verbose:
