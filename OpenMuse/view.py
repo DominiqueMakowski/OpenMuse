@@ -592,11 +592,13 @@ class RealtimeViewer:
             signal_end_x = width * (1.0 - right_margin_fraction)
 
             # Dynamic offset: scale with window width (proportional, not fixed pixels)
-            # About 4% of window width looks good visually
-            right_offset_fraction = 0.04
-            right_column_x = width * (1.0 - right_margin_fraction + right_offset_fraction)
+            # Right margin matches shader's x_margin_right
+            right_margin_fraction = 0.05
+            right_margin_left_x = width * (1.0 - right_margin_fraction)
+            right_margin_right_x = width
+            right_column_x = (right_margin_left_x + right_margin_right_x) / 2
 
-            # Draw EEG impedance (standard deviation) label
+            # Draw EEG impedance (std) label at centered right margin
             for eeg_ch_idx, std_text in self.eeg_std_labels:
                 if eeg_ch_idx == ch_idx:
                     std_text.pos = (right_column_x, y_center)
@@ -724,9 +726,15 @@ class RealtimeViewer:
         self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
 
         # Battery text position
-        bx = x + bar_width
-        by = height * 0.02  # keeps text steady near top-right, independent of bar
+        # Center battery text in the right margin
+        right_margin_fraction = 0.05
+        right_margin_left_x = width * (1.0 - right_margin_fraction)
+        right_margin_right_x = width
+        bx = (right_margin_left_x + right_margin_right_x) / 2
+
+        by = height * 0.02
         self._battery_text_pos_px = (bx, by)
+
 
         self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
         self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
