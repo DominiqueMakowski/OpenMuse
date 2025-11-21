@@ -8,6 +8,8 @@ from vispy import app, gloo
 from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
 
+from collections import deque
+
 from .utils import configure_lsl_api_cfg
 
 # Visualization constants
@@ -43,9 +45,11 @@ void main() {
     float sample_idx = a_index.y;
     
     // X position: Leave space on left for channel names and ticks
-    float x_margin = 0.15;  // 15% of width reserved for labels and ticks
-    float x = x_margin + (1.0 - x_margin) * (sample_idx / u_n_samples);
-    
+    float x_margin_left = 0.12;   // 12% left margin for labels/ticks
+    float x_margin_right = 0.05;  // 5% right margin (blank space)
+
+    float x = x_margin_left + (1.0 - x_margin_left - x_margin_right) * (sample_idx / u_n_samples);
+
     // Y position: stack channels vertically with bottom margin for x-axis labels
     float y_bottom_margin = 0.03;  // 3% bottom margin for x-axis time labels
     float y_usable_height = 1.0 - y_bottom_margin;
@@ -77,7 +81,6 @@ void main() {
     gl_FragColor = v_color;
 }
 """
-
 
 class RealtimeViewer:
     """High-performance real-time signal viewer using GLOO."""
@@ -183,6 +186,10 @@ class RealtimeViewer:
             is_eeg = "EEG" in stream_name.upper()
             is_optics = "OPTICS" in stream_name.upper()
 
+            if "BATTERY" in stream_name.upper():
+                self.battery_stream_idx = stream_idx
+                continue
+
             for ch_idx, ch_name in enumerate(stream.info.ch_names):
                 # Skip inactive channels (zero-padded)
                 if not self.active_channels[stream_idx][ch_idx]:
@@ -196,7 +203,7 @@ class RealtimeViewer:
                 elif is_optics:
                     color = optics_colors[ch_idx % len(optics_colors)]
                     y_range = 0.4
-                    y_ticks = [-0.5, 0, 0.5]  # Relative to center
+                    y_ticks = [-1.0, 0, 1.0]  # Relative to center
                 elif "ACC" in ch_name.upper():
                     color = acc_color
                     y_range = 2.0  # 1 - (-1) = 2.0
@@ -204,7 +211,7 @@ class RealtimeViewer:
                 else:  # GYRO
                     color = gyro_color
                     y_range = 490.0  # 245 - (-245) = 490
-                    y_ticks = [-245, 0, 245]  # Relative to center
+                    y_ticks = [-150, 0, 150]  # Relative to center
 
                 self.channel_info.append(
                     {
@@ -242,6 +249,55 @@ class RealtimeViewer:
             position=(100, 100),
         )
 
+        # Detect Muse_BATTERY stream
+        self.battery_stream_idx = None
+        for stream_idx, s in enumerate(streams):
+            if "BATTERY" in s.name.upper():
+                self.battery_stream_idx = stream_idx
+                break
+
+        # Battery visualizer setup
+        self.battery_history = deque(maxlen=180)
+        self.battery_level = None  # 0–100%
+
+        # Battery text label
+        self.battery_text = TextVisual(
+            "Battery: ---%",
+            pos=(0.97, 0.96),  # near top-right corner
+            color="yellow",
+            font_size=6,
+            anchor_x="right",
+            anchor_y="bottom",
+            bold=True,
+        )
+        self.battery_text.transforms.configure(
+            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
+        )
+
+        # Battery bar shaders
+        BAT_VERT = """
+        attribute vec2 a_position;
+        uniform mat4 u_projection;
+        void main() {
+            gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
+        }
+        """
+        BAT_FRAG = """
+        uniform vec4 u_color;
+        void main() {
+            gl_FragColor = u_color;
+        }
+        """
+
+        # Programs for battery bar background and fill
+        self.battery_prog_bg = gloo.Program(BAT_VERT, BAT_FRAG)
+        self.battery_prog_fill = gloo.Program(BAT_VERT, BAT_FRAG)
+
+        self._battery_bg_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
+        self._battery_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
+        self.battery_prog_bg["a_position"] = self._battery_bg_vbo
+        self.battery_prog_fill["a_position"] = self._battery_fill_vbo
+
         # Create GLOO program for signals
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
 
@@ -262,10 +318,10 @@ class RealtimeViewer:
         for ch_idx, ch_info in enumerate(self.channel_info):
             text = TextVisual(
                 ch_info["name"],
-                pos=(10, 0),  # Will be positioned in on_draw
+                pos=(10, 0), # Will be positioned in on_draw
                 color="white",
-                font_size=10,
-                anchor_x="right",  # Right-aligned at left edge
+                font_size=8,
+                anchor_x="right", 
                 anchor_y="center",
                 bold=True,
             )
@@ -274,7 +330,7 @@ class RealtimeViewer:
             )
             self.channel_labels.append(text)
 
-        # Create EEG standard deviation labels (impedance indicator)
+        # Create EEG standard deviation labels (impedance values)
         self.eeg_std_labels = []
         for ch_idx, ch_info in enumerate(self.channel_info):
             # Only create std labels for EEG channels
@@ -282,7 +338,7 @@ class RealtimeViewer:
             if "EEG" in stream_name.upper():
                 text = TextVisual(
                     "σ: ---",
-                    pos=(0, 0),  # Will be positioned in on_draw
+                    pos=(0, 0), # Will be positioned in on_draw
                     color="yellow",
                     font_size=8,
                     anchor_x="right",
@@ -318,7 +374,7 @@ class RealtimeViewer:
                 f"{time_val:.0f}s",
                 pos=(0, 0),  # Will be positioned in on_draw
                 color="white",
-                font_size=9,
+                font_size=7,
                 anchor_x="center",
                 anchor_y="top",
             )
@@ -329,6 +385,7 @@ class RealtimeViewer:
 
         # Initialize y-tick labels
         self._update_y_tick_labels(create_new=True)
+        self._apply_dynamic_scaling(*self.canvas.size)
 
         # Connect events
         self.canvas.events.draw.connect(self.on_draw)  # type: ignore[attr-defined]
@@ -394,7 +451,6 @@ class RealtimeViewer:
 
     def _create_grid_lines(self):
         """Create grid lines for horizontal separators and y-axis zero lines."""
-        # Simple shader for drawing lines
         grid_vert = """
         attribute vec2 a_position;
         uniform mat4 u_projection;
@@ -412,6 +468,10 @@ class RealtimeViewer:
         self.grid_program = gloo.Program(grid_vert, grid_frag)
         self.grid_program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
 
+        # Right-hand column - margins must match shader
+        x_margin_left = 0.12
+        x_margin_right = 0.05
+
         # Create horizontal grid lines at y-limits for each channel
         # These correspond to where the min/max ticks are shown
         # Signal uses 35% (0.35) of channel height on each side of center
@@ -421,30 +481,34 @@ class RealtimeViewer:
 
         y_limit_lines = []
         for ch_idx in range(self.total_channels):
-            y_offset = (
-                y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
-            )
+            y_offset = y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
             channel_height = y_usable_height / self.total_channels
             y_center = y_offset + 0.5 * channel_height
 
             # Lines at ±35% from center (matching the 0.35 scale in shader)
-            y_top = y_center + 0.35 * channel_height  # Upper y-limit
-            y_bottom = y_center - 0.35 * channel_height  # Lower y-limit
+            y_top = y_center + 0.35 * channel_height # Upper y-limit
+            y_bottom = y_center - 0.35 * channel_height # Lower y-limit
 
-            y_limit_lines.extend([[0.15, y_top], [1.0, y_top]])
-            y_limit_lines.extend([[0.15, y_bottom], [1.0, y_bottom]])
+            # Add top and bottom horizontal lines
+            y_limit_lines.extend([
+                [x_margin_left, y_top],
+                [1.0 - x_margin_right, y_top],
+                [x_margin_left, y_bottom],
+                [1.0 - x_margin_right, y_bottom],
+            ])
 
-        # Add zero lines for each channel (drawn separately with thicker line)
-        self.zero_lines = []
+        # Add zero lines (center lines)
+        zero_lines = []
         for ch_idx in range(self.total_channels):
-            y_offset = (
-                y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
-            )
+            y_offset = y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
             y_center = y_offset + 0.5 * (y_usable_height / self.total_channels)
-            self.zero_lines.extend([[0.15, y_center], [1.0, y_center]])
+            zero_lines.extend([
+                [x_margin_left, y_center],
+                [1.0 - x_margin_right, y_center],
+            ])
 
         self.y_limit_lines = np.array(y_limit_lines, dtype=np.float32)
-        self.zero_lines = np.array(self.zero_lines, dtype=np.float32)
+        self.zero_lines = np.array(zero_lines, dtype=np.float32)
 
     def on_draw(self, event):
         """Render the scene."""
@@ -490,13 +554,18 @@ class RealtimeViewer:
 
             # Draw channel name at the left edge (right-aligned)
             # Increased space to accommodate longer names like "OPTICS_LO_NIR"
-            text_visual.pos = (120, y_center)
+            # Left margin fraction (must match shader’s x_margin_left)
+            x_margin_left = 0.12
+            label_offset_fraction = 0.03
+            label_x_fraction = x_margin_left - label_offset_fraction
+            label_x = width * label_x_fraction
+            text_visual.pos = (label_x, y_center)
             text_visual.draw()
 
             # Draw y-tick labels for this channel (right-aligned, close to signal edge)
             # Position ticks to match shader positioning
-            # Place at width * 0.15 - 5 pixels (just before signal starts)
-            tick_x = width * 0.15 - 5
+            # Place at just before signal starts
+            tick_x = width * (x_margin_left - 0.005)
             y_range = ch_info["y_range"]
             y_scale_zoom = ch_info["y_scale"]  # User's zoom level (from mouse wheel)
 
@@ -516,26 +585,151 @@ class RealtimeViewer:
                 tick_text.pos = (tick_x, tick_y)
                 tick_text.draw()
 
-            # Draw EEG standard deviation (impedance indicator) on the right side
+            # Right margin matches shader's x_margin_right
+            right_margin_fraction = 0.05
+
+            # Compute the signal region's right edge
+            signal_end_x = width * (1.0 - right_margin_fraction)
+
+            # Dynamic offset: scale with window width (proportional, not fixed pixels)
+            # About 4% of window width looks good visually
+            right_offset_fraction = 0.04
+            right_column_x = width * (1.0 - right_margin_fraction + right_offset_fraction)
+
+            # Draw EEG impedance (standard deviation) label
             for eeg_ch_idx, std_text in self.eeg_std_labels:
                 if eeg_ch_idx == ch_idx:
-                    std_text.pos = (width - 10, y_center)
+                    std_text.pos = (right_column_x, y_center)
                     std_text.draw()
                     break
 
         # Draw time labels (x-axis)
-        x_margin = 0.15  # Same as in shader (15% for labels and ticks)
-        signal_width = width * (1.0 - x_margin)
-        x_start = width * x_margin
+        x_margin_left = 0.12
+        x_margin_right = 0.05
+        signal_width = width * (1.0 - x_margin_left - x_margin_right)
+        x_start = width * x_margin_left
+
+        # Y position ABOVE the signal region (top)
+        y_signal_top_px = height            # top of usable signal region
+        y_tick_offset_px = height * 0.015   # scalable offset downward
+        y_pos = y_signal_top_px - y_tick_offset_px
 
         for time_val, text_visual in self.time_labels:
             # Calculate x position (time_val is negative, from -window_size to 0)
             # Map to signal area only (after the left margin)
             x_fraction = (time_val + self.window_size) / self.window_size
             x_pos = x_start + (x_fraction * signal_width)
-            # Increased bottom margin to 25px to prevent overlap with bottom channel
-            text_visual.pos = (x_pos, height - 25)
+
+            text_visual.pos = (x_pos, y_pos)
             text_visual.draw()
+
+        # Battery overlay drawing
+        width, height = self.canvas.size
+
+        # Align battery text just above the bar, same right offset
+        bar = self._battery_rect_px
+        # Use dynamically scaled position from _apply_dynamic_scaling
+        bx, by = self._battery_text_pos_px
+        self.battery_text.pos = (bx, by)
+
+        # Update color + label depending on level
+        if self.battery_level is None:
+            # show placeholder even before data arrives
+            self.battery_text.color = "yellow"
+            self.battery_text.text = "BATT: ---%"
+        else:
+            if self.battery_level >= 60:
+                col = (0.2, 0.85, 0.2, 1.0)
+                self.battery_text.color = "lime"
+            elif self.battery_level >= 30:
+                col = (0.95, 0.75, 0.15, 1.0)
+                self.battery_text.color = "yellow"
+            else:
+                col = (0.9, 0.25, 0.2, 1.0)
+                self.battery_text.color = "red"
+            self.battery_text.text = f"BATT: {self.battery_level:.0f}%"
+
+        # Draw battery text
+        self.battery_text.draw()
+
+        # Draw the bar only when we have a level
+        if self.battery_level is not None:
+            x = self._battery_rect_px["x"]
+            y = self._battery_rect_px["y"]
+            w = self._battery_rect_px["w"]
+            h = self._battery_rect_px["h"]
+
+            # Background bar
+            bg = np.array([
+                [x, y], [x + w, y], [x, y + h], [x + w, y + h]
+            ], dtype=np.float32)
+            self._battery_bg_vbo.set_data(bg)
+            self.battery_prog_bg["u_color"] = (0.25, 0.25, 0.25, 1.0)
+            self.battery_prog_bg.draw("triangle_strip")
+
+            # Fill proportional to battery level
+            frac = max(0.0, min(1.0, self.battery_level / 100.0))
+
+            # Use proportional padding so it doesn’t vanish when window is small
+            pad = max(1.0, 0.08 * min(w, h))   # ~8% of bar height/width
+
+            w_fill = max(0.0, frac * (w - 2 * pad))
+            fill = np.array([
+                [x + pad, y + pad],
+                [x + pad + w_fill, y + pad],
+                [x + pad, y + h - pad],
+                [x + pad + w_fill, y + h - pad],
+            ], dtype=np.float32)
+            self._battery_fill_vbo.set_data(fill)
+            self.battery_prog_fill["u_color"] = col
+            self.battery_prog_fill.draw("triangle_strip")
+
+            # Finally draw the text
+            self.battery_text.draw()
+
+    def _apply_dynamic_scaling(self, width: int, height: int):
+        """Dynamically scale text and battery bar based on window size."""
+        base_width, base_height = 1400.0, 900.0
+        scale_x = width / base_width
+        scale_y = height / base_height
+        font_scale = max(0.5, min(2.5, scale_y))
+
+        # Scale all text labels proportionally
+        base_sizes = {
+            "channel": 8,
+            "eeg_std": 8,
+            "time": 6,
+            "tick": 4,
+            "battery": 6,
+        }
+        for text in self.channel_labels:
+            text.font_size = base_sizes["channel"] * font_scale
+        for _, text in self.eeg_std_labels:
+            text.font_size = base_sizes["eeg_std"] * font_scale
+        for _, text in self.time_labels:
+            text.font_size = base_sizes["time"] * font_scale
+        for ch_ticks in self.y_tick_labels:
+            for _, text in ch_ticks:
+                text.font_size = base_sizes["tick"] * font_scale
+        self.battery_text.font_size = base_sizes["battery"] * (0.5 * scale_x + 0.5 * scale_y)
+
+        # Battery bar in pixel coordinates (top-right corner)
+        bar_width = 0.035 * width
+        bar_height = 0.022 * height
+        x = width - bar_width - 0.0075 * width
+
+        # Move the bar higher (smaller fraction = closer to top)
+        y = height * 0.94  # e.g., 8% from bottom instead of 4%
+
+        self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
+
+        # Battery text position
+        bx = x + bar_width
+        by = height * 0.02  # keeps text steady near top-right, independent of bar
+        self._battery_text_pos_px = (bx, by)
+
+        self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
+        self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
 
     def on_resize(self, event):
         """Handle window resize."""
@@ -554,6 +748,11 @@ class RealtimeViewer:
         for _, text in self.time_labels:
             text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
 
+        self.battery_text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+
+        # Dynamically scale all text based on window size
+        self._apply_dynamic_scaling(*event.size)
+
     def _update_time_labels(self):
         """Update time labels based on current window_size."""
         # Remove old labels
@@ -567,7 +766,7 @@ class RealtimeViewer:
                 f"{time_val:.0f}s",
                 pos=(0, 0),  # Will be positioned in on_draw
                 color="white",
-                font_size=9,
+                font_size=8,
                 anchor_x="center",
                 anchor_y="top",
             )
@@ -608,7 +807,7 @@ class RealtimeViewer:
                         tick_str,
                         pos=(0, 0),  # Will be positioned in on_draw
                         color="gray",
-                        font_size=7,
+                        font_size=6,
                         anchor_x="right",
                         anchor_y="center",
                     )
@@ -673,9 +872,13 @@ class RealtimeViewer:
 
     def on_key_press(self, event):
         """Handle keyboard input for time window zooming."""
-        if event.key.name in ["+", "-", "="]:
+        key = getattr(event, "key", None)
+        if key is None or not hasattr(key, "name"):
+            return  # Ignore invalid key events
+
+        if key.name in ["+", "-", "="]:
             # Time window zoom - change window_size (not u_scale which shifts signals)
-            if event.key.name in ["+", "="]:
+            if key.name in ["+", "="]:
                 # Zoom in - show less time (smaller window)
                 self.window_size = max(1.0, self.window_size * 0.8)
             else:
@@ -843,6 +1046,19 @@ class RealtimeViewer:
             channel_global_idx = self.channel_info.index(ch_info)
             self.data[:, channel_global_idx] = normalized_data
 
+        # Battery stream update
+        if self.battery_stream_idx is not None:
+            bat_stream = self.streams[self.battery_stream_idx]
+            try:
+                bat_data, bat_ts = bat_stream.get_data(winsize=5.0)
+                if bat_data.shape[1] > 0:
+                    latest = float(bat_data[0, -1])
+                    latest = max(0.0, min(100.0, latest))
+                    self.battery_level = latest
+                    self.battery_history.append(latest)
+            except Exception:
+                pass
+
         # Update vertex positions
         self.program["a_position"].set_data(self.data.T.ravel().astype(np.float32))
 
@@ -886,12 +1102,10 @@ class RealtimeViewer:
                             print(
                                 f"    Mean rate: {avg_rate:.1f} Hz (expected: {stream.info['sfreq']} Hz)"
                             )
-
         try:
             app.run()
         except KeyboardInterrupt:
             pass
-
 
 def view(
     stream_name: Optional[str] = None,
@@ -929,10 +1143,11 @@ def view(
     streams = []
     if stream_name is None:
         # Try all possible Muse streams
-        for name in ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS"]:
+        for name in ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS", "Muse_BATTERY"]:
             if verbose:
                 print(f"Looking for LSL stream '{name}'...")
             try:
+                bufsize = window_size if name != "Muse_BATTERY" else 120.0
                 stream = StreamLSL(bufsize=window_size, name=name)
                 stream.connect(timeout=2.0)
                 streams.append(stream)

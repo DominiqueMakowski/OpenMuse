@@ -10,7 +10,7 @@ import scipy.signal
 
 
 # --- Configuration ---
-filename = "./test-21.xdf"
+filename = "./validate_synchronization2.xdf"
 dejitter_timestamps = ["OpenSignals"]
 # select_streams = [
 #     {"name": "Muse_ACCGYRO"},
@@ -68,8 +68,7 @@ for i, stream in enumerate(streams):
 
 
 # --- Plot streams ---
-xmin = tmin
-xmin = 164000
+xmin = tmin + 60
 fig = plt.figure(figsize=(15, 7))
 for i, s in enumerate(streams):
     name = s["info"].get("name", ["Unnamed"])[0]
@@ -78,29 +77,29 @@ for i, s in enumerate(streams):
         lux = s["time_series"][:, channels.index("LUX0")]
         lux = (lux - np.min(lux)) / (np.max(lux) - np.min(lux))
         lux_ts = s["time_stamps"]
-        mask = (lux_ts >= xmin) & (lux_ts <= xmin + 10)
+        mask = (lux_ts >= xmin) & (lux_ts <= xmin + 5)
         plt.plot(lux_ts[mask], lux[mask], color="blue", label="LUX")
     if name in ["Muse_OPTICS"]:
         optics = s["time_series"][:, channels.index("OPTICS_RI_AMB")]
         optics = (optics - np.min(optics)) / (np.max(optics) - np.min(optics))
         optics_ts = s["time_stamps"]
-        mask = (optics_ts >= xmin) & (optics_ts <= xmin + 10)
+        mask = (optics_ts >= xmin) & (optics_ts <= xmin + 5)
         plt.plot(optics_ts[mask], optics[mask], color="red", label="OPTICS")
 plt.legend()
 plt.tight_layout()
 plt.show()
 
 
-events_lux = nk.events_find(lux, threshold_keep="below", duration_min=5)
+events_lux = nk.events_find(lux, threshold=0.2, threshold_keep="below", duration_min=5)
 events_optics = nk.events_find(
-    optics, threshold=0.75, threshold_keep="above", duration_min=5
+    optics, threshold=0.2, threshold_keep="above", duration_min=5
 )
 print(
     f"N events LUX: {len(events_lux['onset'])}, N events OPTICS: {len(events_optics['onset'])}"
 )
 onsets_lux = lux_ts[events_lux["onset"]]
 onsets_optics = optics_ts[events_optics["onset"]]
-# onsets_optics = nk.find_closest(onsets_lux, onsets_optics)
+onsets_optics = nk.find_closest(onsets_lux, onsets_optics)
 diff = onsets_lux - onsets_optics
 np.median(diff)
 
