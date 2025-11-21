@@ -129,7 +129,7 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, TextIO
 
 import bleak
 import numpy as np
@@ -309,7 +309,7 @@ async def _stream_async(
     address: str,
     preset: str,
     duration: Optional[float] = None,
-    raw_data_file: Optional[str] = None,
+    raw_data_file: Optional[TextIO] = None,
     verbose: bool = True,
 ):
     """Asynchronous context for BLE connection and LSL streaming."""
@@ -375,9 +375,9 @@ async def _stream_async(
 
             # Only update filter if this packet is 'newer'
             # This prevents out-of-order packets from corrupting the model
-            if last_device_time  > last_update_device_time:
+            if last_device_time > last_update_device_time:
                 # Update the filter with the new (device_time, lsl_now) pair
-                drift_filter.update(y=lsl_now, x=np.array([last_device_time , 1.0]))
+                drift_filter.update(y=lsl_now, x=np.array([last_device_time, 1.0]))
                 stream.last_update_device_time = last_device_time
 
             # Get current model parameters [b, a]
@@ -385,7 +385,7 @@ async def _stream_async(
 
             # Safety check: If filter diverges, reset it
             if not (0.5 < drift_b < 1.5):
-                time_diff = last_device_time  - prev_device_time
+                time_diff = last_device_time - prev_device_time
                 if (
                     verbose and (lsl_now - start_time) > 5.0
                 ):  # Suppress early warnings during warmup
@@ -444,10 +444,13 @@ async def _stream_async(
                 if verbose:
                     print(f"Error pushing LSL chunk for {sensor_type}: {e}")
 
-    def _on_data(_, data: bytearray):
+    def _on_data(sender, data: bytearray):
         """Main data callback from Bleak."""
         ts = get_utc_timestamp()  # Get system timestamp once
-        message = f"{ts}\t{MuseS.EEG_UUID}\t{data.hex()}"
+        # Use sender.uuid (or str(sender)) to identify the source characteristic
+        # BleakGATTCharacteristic.uuid is a string
+        uuid_str = str(sender.uuid) if hasattr(sender, "uuid") else str(sender)
+        message = f"{ts}\t{uuid_str}\t{data.hex()}"
 
         # --- Optional: Write raw data to file ---
         if raw_data_file:
@@ -514,7 +517,7 @@ async def _stream_async(
         start_time = time.monotonic()
 
         # Subscribe to data and configure device
-        data_callbacks = {MuseS.EEG_UUID: _on_data}
+        data_callbacks = {uuid: _on_data for uuid in MuseS.DATA_CHARACTERISTICS}
         await MuseS.connect_and_initialize(
             client, preset, data_callbacks, verbose=verbose
         )
