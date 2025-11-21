@@ -929,12 +929,12 @@ def decode_rawdata(messages: List[str]) -> Dict[str, pd.DataFrame]:
 
         if sensor_type == "EEG":
             n_channels = n_cols - 1
-            columns = ["time", *_select_eeg_channels(n_channels)]
+            columns = ["time", *select_eeg_channels(n_channels)]
         elif sensor_type == "ACCGYRO":
             columns = ["time", *ACCGYRO_CHANNELS]
         elif sensor_type == "OPTICS":
             n_channels = n_cols - 1
-            columns = ["time", *_select_optics_channels(n_channels)]
+            columns = ["time", *select_optics_channels(n_channels)]
         elif sensor_type == "BATTERY":
             columns = ["time", "battery_percent"]
         else:
