@@ -162,7 +162,7 @@ OPTICS_CHANNELS = (
 BATTERY_CHANNELS = ("BATTERY_PERCENT",)
 
 
-def _select_eeg_channels(count: int) -> List[str]:
+def select_eeg_channels(count: int) -> List[str]:
     if count <= len(EEG_CHANNELS):
         return list(EEG_CHANNELS[:count])
     return [f"EEG_{i+1:02d}" for i in range(count)]
@@ -175,7 +175,7 @@ _OPTICS_INDEXES = {
 }
 
 
-def _select_optics_channels(count: int) -> List[str]:
+def select_optics_channels(count: int) -> List[str]:
     indices = _OPTICS_INDEXES.get(count)
     if indices is not None:
         return [OPTICS_CHANNELS[i] for i in indices]
@@ -929,12 +929,12 @@ def decode_rawdata(messages: List[str]) -> Dict[str, pd.DataFrame]:
 
         if sensor_type == "EEG":
             n_channels = n_cols - 1
-            columns = ["time", *_select_eeg_channels(n_channels)]
+            columns = ["time", *select_eeg_channels(n_channels)]
         elif sensor_type == "ACCGYRO":
             columns = ["time", *ACCGYRO_CHANNELS]
         elif sensor_type == "OPTICS":
             n_channels = n_cols - 1
-            columns = ["time", *_select_optics_channels(n_channels)]
+            columns = ["time", *select_optics_channels(n_channels)]
         elif sensor_type == "BATTERY":
             columns = ["time", "battery_percent"]
         else:
