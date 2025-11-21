@@ -7,4 +7,4 @@ from .record import record
 from .stream import stream
 from .view import view
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
