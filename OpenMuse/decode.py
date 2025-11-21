@@ -162,7 +162,7 @@ OPTICS_CHANNELS = (
 BATTERY_CHANNELS = ("BATTERY_PERCENT",)
 
 
-def _select_eeg_channels(count: int) -> List[str]:
+def select_eeg_channels(count: int) -> List[str]:
     if count <= len(EEG_CHANNELS):
         return list(EEG_CHANNELS[:count])
     return [f"EEG_{i+1:02d}" for i in range(count)]
@@ -175,7 +175,7 @@ _OPTICS_INDEXES = {
 }
 
 
-def _select_optics_channels(count: int) -> List[str]:
+def select_optics_channels(count: int) -> List[str]:
     indices = _OPTICS_INDEXES.get(count)
     if indices is not None:
         return [OPTICS_CHANNELS[i] for i in indices]
