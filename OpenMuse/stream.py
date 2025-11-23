@@ -149,65 +149,89 @@ from .decode import (
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
-MAX_BUFFER_PACKETS = 52  # 52 packets per sensor
-FLUSH_INTERVAL = 0.2  # 200ms
+MAX_BUFFER_PACKETS = 52  # ~200ms capacity for 256Hz
+FLUSH_INTERVAL = 0.2  # 200ms jitter buffer
 
 
-class RLSFilter:
+class StableClock:
     """
-    Implements a Recursive Least Squares (RLS) filter for online clock drift.
+    A physics-constrained RLS filter for clock synchronization.
 
-    Models the linear relationship: y = X * theta
-    Where:
-      y = lsl_now
-      X = [device_time, 1.0]
-      theta = [b, a] (slope, intercept)
+    Unlike a standard linear regression, this filter has a strong prior belief
+    that the clock drift (slope) is 1.0. This prevents 'buffer bloat' or
+    latency spikes from being misinterpreted as clock skew.
+
+    Model:
+        lsl_time = intercept + (slope * device_time)
+
+    State:
+        theta = [slope, intercept]
+        P     = Covariance matrix
     """
 
-    def __init__(self, dim: int, lam: float, P_init: float):
-        self.dim = dim
-        self.lam = lam  # Forgetting factor
-        self.P_init = P_init  # Initial covariance
-        # Initialize parameters [b, a] = [1.0, 0.0]
+    def __init__(self, forgetting_factor: float = 0.9995):
+        self.lam = forgetting_factor
+        self.dim = 2
+
+        # Initialize State: Slope=1.0, Intercept=0.0
         self.theta = np.array([1.0, 0.0])
-        # Initialize covariance matrix
-        self.P = np.eye(self.dim) * self.P_init
 
-    def reset(self, lam: Optional[float] = None, P_init: Optional[float] = None):
-        """Reset the filter state."""
-        if lam:
-            self.lam = lam
-        if P_init:
-            self.P_init = P_init
-        self.theta = np.array([1.0, 0.0])
-        self.P = np.eye(self.dim) * self.P_init
+        # Initialize Covariance:
+        # P[0,0] (Slope Variance): Set extremely low (1e-10).
+        #   -> We are 99.99% sure the Muse clock is running at real-time speed.
+        # P[1,1] (Intercept Variance): Set high (1000).
+        #   -> We have no idea what the initial offset is.
+        self.P = np.zeros((2, 2))
+        self.P[0, 0] = 1e-10
+        self.P[1, 1] = 1000.0
 
-    def update(self, y: float, x: np.ndarray):
+        self.initialized = False
+        self.first_device_time = 0.0
+
+    def update(self, device_time: float, lsl_now: float):
         """
-        Numerically-stable RLS update using Joseph form.
-        y : scalar output (lsl_now)
-        x : input vector shape (2,) corresponding to [device_time, 1.0]
+        Update the clock model with a new measurement pair.
         """
-        x = x.reshape(-1, 1)  # column
-        P_x = self.P @ x
-        den = float(self.lam + (x.T @ P_x))  # scalar
+        # On first packet, just snap the intercept to the current offset
+        if not self.initialized:
+            self.first_device_time = device_time
+            self.theta[1] = lsl_now - device_time
+            self.initialized = True
+            return
 
-        # gain
-        k = P_x / den  # shape (dim,1)
+        # RLS Update (Joseph form for stability)
+        # Input vector x = [device_time, 1.0]
+        x = np.array([device_time, 1.0]).reshape(-1, 1)
 
-        # prediction error
+        # Prediction
         y_pred = float(x.T @ self.theta)
-        e = y - y_pred
+        error = lsl_now - y_pred
 
-        # update theta
-        self.theta = self.theta + (k * e).flatten()
+        # Gain Calculation
+        Px = self.P @ x
+        den = float(self.lam + (x.T @ Px))
+        k = Px / den
 
-        # Joseph form for P update to preserve symmetry
+        # State Update
+        self.theta = self.theta + (k * error).flatten()
+
+        # Covariance Update
         I = np.eye(self.dim)
         KX = k @ x.T
         self.P = (I - KX) @ self.P @ (I - KX).T + (k @ k.T) * 1e-12
-        # apply forgetting factor
         self.P /= self.lam
+
+        # Safety Clamp: Ensure slope stays physically realistic (0.9 < slope < 1.1)
+        self.theta[0] = np.clip(self.theta[0], 0.9, 1.1)
+
+    def map_time(self, device_times: np.ndarray) -> np.ndarray:
+        """Transform device timestamps to LSL time using current model."""
+        if not self.initialized:
+            # Fallback if called before update
+            return device_times
+
+        slope, intercept = self.theta
+        return intercept + (slope * device_times)
 
 
 @dataclass
@@ -216,16 +240,15 @@ class SensorStream:
 
     outlet: StreamOutlet
     buffer: List[Tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
-    # Track state for make_timestamps (wraparound, sample counter, etc.)
+
+    # Track state for make_timestamps
     base_time: Optional[float] = None
     wrap_offset: int = 0
     last_abs_tick: int = 0
     sample_counter: int = 0
-    # --- Per-stream state for online drift correction ---
-    drift_filter: RLSFilter = field(
-        default_factory=lambda: RLSFilter(dim=2, lam=0.9999, P_init=1e6)
-    )
-    drift_initialized: bool = False
+
+    # --- Stable Clock Sync ---
+    clock: StableClock = field(default_factory=StableClock)
     last_update_device_time: float = 0.0
 
 
@@ -288,98 +311,42 @@ async def _stream_async(
     streams: Dict[str, SensorStream] = {}
     last_flush_time = 0.0
     samples_sent = {"EEG": 0, "ACCGYRO": 0, "OPTICS": 0, "BATTERY": 0}
-    start_time = 0.0  # Will be set after connection
+    start_time = 0.0
 
     def _queue_samples(sensor_type: str, data_array: np.ndarray, lsl_now: float):
         """
-        Apply drift correction and buffer samples using a per-stream filter.
-
-        Parameters
-        ----------
-        sensor_type : str
-            The name of the sensor (e.g., "EEG").
-        data_array : np.ndarray
-            The array from make_timestamps, shape (n_samples, 1 + n_channels).
-            Column 0 is device_time, remaining are sensor values.
-        lsl_now : float
-            The computer's LSL clock time when the BLE message was received.
+        Map timestamps and buffer samples.
         """
-        # Validate input
-        if data_array.size == 0:
-            return
-        if data_array.ndim != 2 or data_array.shape[1] < 2:
-            if verbose:
-                print(
-                    f"Warning: Invalid data shape for {sensor_type}: {data_array.shape}"
-                )
+        if data_array.size == 0 or data_array.ndim != 2 or data_array.shape[1] < 2:
             return
 
         stream = streams.get(sensor_type)
         if stream is None:
-            return  # No LSL outlet for this type
+            return
 
-        # --- Get PER-STREAM filter state ---
-        drift_filter = stream.drift_filter
-        drift_initialized = stream.drift_initialized
-        last_update_device_time = stream.last_update_device_time
-
-        # Extract device timestamps (relative to t=0 from make_timestamps)
+        # Extract device timestamps
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
 
-        # --- Drift Correction ---
-        # Get the last device time from the chunk.
+        # --- Update Clock Model ---
+        # We update the clock using the *latest* packet in this chunk
         last_device_time = device_times[-1]
 
-        if not drift_initialized:
-            # Initialize this sensor's filter
-            initial_a = lsl_now - last_device_time
-            drift_filter.theta = np.array([1.0, initial_a])
-            stream.drift_initialized = True
+        # Only update if time moved forward (avoids issues with out-of-order arrival for model update)
+        if last_device_time > stream.last_update_device_time:
+            stream.clock.update(last_device_time, lsl_now)
             stream.last_update_device_time = last_device_time
-            # Use initial parameters
-            drift_b, drift_a = 1.0, initial_a
-        else:
-            # Save for potential warning message
-            prev_device_time = last_update_device_time
 
-            # Only update filter if this packet is 'newer'
-            # This prevents out-of-order packets from corrupting the model
-            if last_device_time > last_update_device_time:
-                # Update the filter with the new (device_time, lsl_now) pair
-                drift_filter.update(y=lsl_now, x=np.array([last_device_time, 1.0]))
-                stream.last_update_device_time = last_device_time
+        # --- Map Timestamps ---
+        # Transform the entire chunk using the current stable model
+        lsl_timestamps = stream.clock.map_time(device_times)
 
-            # Get current model parameters [b, a]
-            drift_b, drift_a = drift_filter.theta
-
-            # Safety check: If filter diverges, reset it
-            if not (0.5 < drift_b < 1.5):
-                time_diff = last_device_time - prev_device_time
-                if (
-                    verbose and (lsl_now - start_time) > 5.0
-                ):  # Suppress early warnings during warmup
-                    print(
-                        f"Warning: Unstable drift fit for {sensor_type}. Resetting filter. "
-                        f"[Slope(b)={drift_b:.4f}, TimeDiff={time_diff:.3f}s, "
-                        f"NewDevTime={last_device_time :.3f}, LastDevTime={prev_device_time:.3f}]"
-                    )
-                # Reset and re-initialize
-                drift_filter.reset()
-                stream.drift_initialized = False
-                # Use a simple offset for this packet
-                drift_a = lsl_now - last_device_time
-                drift_b = 1.0
-
-        # Apply the correction: lsl_timestamps = a + (b * device_times)
-        lsl_timestamps = drift_a + (drift_b * device_times)
-
-        # Add to this sensor's buffer
+        # Add to buffer
         stream.buffer.append((lsl_timestamps, samples))
 
     def _flush_buffer():
         """Sort and push all buffered samples to LSL."""
-        nonlocal last_flush_time, samples_sent  # noqa: F824
+        nonlocal last_flush_time, samples_sent
         last_flush_time = time.monotonic()
 
         for sensor_type, stream in streams.items():
@@ -391,24 +358,22 @@ async def _stream_async(
             all_samples = np.concatenate([s for _, s in stream.buffer])
             stream.buffer.clear()
 
-            # Sort by LSL timestamp to ensure correct order
+            # Sort by LSL timestamp to correct BLE packet reordering
             sort_indices = np.argsort(all_timestamps)
             sorted_timestamps = all_timestamps[sort_indices]
             sorted_data = all_samples[sort_indices, :]
 
-            # Push the chunk to LSL
+            # Push chunk
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
-                        "ignore",
-                        message=".*A single sample is pushed.*",
+                        "ignore", message=".*A single sample is pushed.*"
                     )
                     stream.outlet.push_chunk(
                         x=sorted_data.astype(np.float32, copy=False),
                         timestamp=sorted_timestamps.astype(np.float64, copy=False),
                         pushThrough=True,
                     )
-
                 samples_sent[sensor_type] += len(sorted_data)
             except Exception as e:
                 if verbose:
@@ -416,78 +381,66 @@ async def _stream_async(
 
     def _on_data(sender, data: bytearray):
         """Main data callback from Bleak."""
-        ts = get_utc_timestamp()  # Get system timestamp once
-        # Use sender.uuid (or str(sender)) to identify the source characteristic
-        # BleakGATTCharacteristic.uuid is a string
+        ts = get_utc_timestamp()
         uuid_str = str(sender.uuid) if hasattr(sender, "uuid") else str(sender)
         message = f"{ts}\t{uuid_str}\t{data.hex()}"
 
-        # --- Optional: Write raw data to file ---
         if raw_data_file:
             try:
                 raw_data_file.write(message + "\n")
-            except Exception as e:
-                if verbose:
-                    print(f"Error writing to raw data file: {e}")
+            except Exception:
+                pass
 
-        # --- Decode all subpackets in the message ---
         subpackets = parse_message(message)
         decoded: Dict[str, np.ndarray] = {}
 
-        # Ensure streams exist for all received data types
+        # Ensure streams exist
         for sensor_type, pkt_list in subpackets.items():
-            if not pkt_list:
-                continue
-            if sensor_type not in streams:
-                # Get n_channels from first subpacket
+            if pkt_list and sensor_type not in streams:
                 n_channels = pkt_list[0].get("n_channels")
                 if n_channels:
                     streams[sensor_type] = create_stream_outlet(
                         sensor_type, n_channels, client.name, address
                     )
 
+        # Decode & Make Timestamps (Relative Device Time)
         for sensor_type, pkt_list in subpackets.items():
             stream = streams.get(sensor_type)
             if stream:
-                # 1. Get current state for this sensor
                 current_state = (
                     stream.base_time,
                     stream.wrap_offset,
                     stream.last_abs_tick,
                     stream.sample_counter,
                 )
-
-                # 2. Call make_timestamps (This creates the t=0 relative device_time)
                 array, base_time, wrap_offset, last_abs_tick, sample_counter = (
                     make_timestamps(pkt_list, *current_state)
                 )
                 decoded[sensor_type] = array
 
-                # 3. Update state
+                # Update state
                 stream.base_time = base_time
                 stream.wrap_offset = wrap_offset
                 stream.last_abs_tick = last_abs_tick
                 stream.sample_counter = sample_counter
 
-        # --- Queue Samples with Drift Correction ---
-        # Get LSL clock time *once* for this entire BLE message
+        # Get 'now' for clock sync
         lsl_now = local_clock()
 
-        # Queue all decoded sensor data
+        # Queue samples
         for sensor_type in ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]:
             sensor_data = decoded.get(sensor_type, np.empty((0, 0)))
             if sensor_data.size > 0:
                 _queue_samples(sensor_type, sensor_data, lsl_now)
 
-        # --- Flush buffer if needed (by time OR size) ---
+        # Flush trigger
         should_flush = (time.monotonic() - last_flush_time > FLUSH_INTERVAL) or any(
             len(s.buffer) > MAX_BUFFER_PACKETS for s in streams.values()
         )
-
         if should_flush:
             _flush_buffer()
 
-    # --- Main connection logic ---
+    # --- Connection ---
     if verbose:
         print(f"Connecting to {address}...")
 
@@ -495,11 +448,7 @@ async def _stream_async(
         if verbose:
             print(f"Connected. Device: {client.name}")
 
-        # Create LSL outlets
-        # streams = {}  # Already initialized at start of _stream_async
         start_time = time.monotonic()
-
-        # Subscribe to data and configure device
         data_callbacks = {uuid: _on_data for uuid in MuseS.DATA_CHARACTERISTICS}
         await MuseS.connect_and_initialize(
             client, preset, data_callbacks, verbose=verbose
@@ -508,30 +457,16 @@ async def _stream_async(
         if verbose:
             print("Streaming data... (Press Ctrl+C to stop)")
 
-        # --- Main streaming loop ---
         while True:
-            await asyncio.sleep(0.5)  # Main loop sleep
-            # Check duration
+            await asyncio.sleep(0.5)
             if duration and (time.monotonic() - start_time) > duration:
-                if verbose:
-                    print(f"Streaming duration ({duration}s) elapsed.")
                 break
-            # Flush buffer one last time if connection is lost
             if not client.is_connected:
-                if verbose:
-                    print("Client disconnected.")
                 break
 
-        # --- Shutdown ---
-        _flush_buffer()  # Final flush
+        _flush_buffer()
         if verbose:
-            print(
-                "Stream stopped. "
-                + ", ".join(
-                    f"{sensor}: {count} samples"
-                    for sensor, count in samples_sent.items()
-                )
-            )
+            print("Stream stopped.")
 
 
 def stream(
@@ -543,33 +478,9 @@ def stream(
 ) -> None:
     """
     Stream decoded EEG and accelerometer/gyroscope data over LSL.
-
-    Creates four LSL streams:
-    - Muse_EEG: 8 channels at 256 Hz (EEG + AUX)
-    - Muse_ACCGYRO: 6 channels at 52 Hz (accelerometer + gyroscope)
-    - Muse_OPTICS: 16 channels at 64 Hz (PPG sensors)
-    - Muse_BATTERY: 1 channel at 1 Hz (battery percentage)
-
-    Parameters
-    ----------
-    address : str
-        Device address (e.g., MAC on Windows).
-    preset : str
-        Preset to send (e.g., p1041 for all channels, p1035 for basic config).
-    duration : float, optional
-        Optional stream duration in seconds. Omit to stream until interrupted.
-    record : bool or str, optional
-        If False (default), do not record raw data.
-        If True, record raw BLE packets to a default timestamped file
-        (e.g., 'rawdata_stream_20251024_183000.txt').
-        If a string is provided, use it as the filename.
-    verbose : bool
-        If True (default), print connection and status messages.
     """
-    # Configure MNE-LSL
     configure_lsl_api_cfg()
 
-    # Handle 'record' argument
     raw_data_file = None
     file_handle = None
     if record:
@@ -577,16 +488,12 @@ def stream(
             filename = record
         else:
             filename = f"rawdata_stream_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-
         try:
             file_handle = open(filename, "w", encoding="utf-8")
             raw_data_file = file_handle
-            if verbose:
-                print(f"Recording raw data to: {filename}")
         except IOError as e:
             print(f"Warning: Could not open file for recording: {e}")
 
-    # --- Run the main asynchronous streaming loop ---
     try:
         asyncio.run(_stream_async(address, preset, duration, raw_data_file, verbose))
     except KeyboardInterrupt:
@@ -594,14 +501,8 @@ def stream(
             print("Streaming stopped by user.")
     except BleakError as e:
         print(f"BLEAK Error: {e}")
-        print(
-            "This may be a connection issue. Ensure the device is charged and nearby."
-        )
-        print("If on Linux, you may need to run with 'sudo' or set permissions.")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
     finally:
         if file_handle:
             file_handle.close()
-            if verbose:
-                print("Raw data file closed.")
