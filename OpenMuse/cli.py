@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from .find import find_devices
+from .muse import find_muse
 from .record import record
 
 
@@ -24,7 +24,7 @@ def main(argv=None):
     _add_find_args(p_find)
 
     def handle_find(ns):
-        find_devices(timeout=ns.timeout, verbose=True)
+        find_muse(timeout=ns.timeout, verbose=True)
         return 0
 
     p_find.set_defaults(func=handle_find)

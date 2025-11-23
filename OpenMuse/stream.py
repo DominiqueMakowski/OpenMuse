@@ -112,7 +112,7 @@ Four LSL streams are created:
 - Muse_BATTERY: 1 channel at 1 Hz (battery percentage)
 
 Each stream includes:
-- Channel labels (from decode.py: EEG_CHANNELS, ACCGYRO_CHANNELS, OPTICS_CHANNELS)
+- Channel labels (from decode.py)
 - Nominal sampling rate (declared device rate)
 - Data type (float32)
 - Manufacturer metadata
@@ -143,8 +143,6 @@ from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 from .decode import (
     ACCGYRO_CHANNELS,
     BATTERY_CHANNELS,
-    EEG_CHANNELS,
-    OPTICS_CHANNELS,
     make_timestamps,
     parse_message,
     select_eeg_channels,
