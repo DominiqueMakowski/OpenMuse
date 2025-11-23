@@ -10,29 +10,33 @@ Streaming Architecture:
 -----------------------
 1. BLE packets arrive asynchronously via Bleak callbacks (_on_data)
 2. Packets are decoded using parse_message() from decode.py
-3. Device timestamps are converted to LSL time
+3. Device timestamps are converted to LSL time using a Stable Clock model
 4. Samples are buffered to allow packet reordering
 5. Buffer is periodically flushed: samples sorted by timestamp and pushed to LSL
 6. LSL outlets broadcast data to any connected LSL clients (e.g., LabRecorder)
 
-Timestamp Handling - Online Drift Correction:
----------------------------------------------
-This version implements an online drift correction to compensate for clock skew
-between the Muse device and the computer.
+Timestamp Handling - Stable Clock Synchronization:
+--------------------------------------------------
+This version implements a "Stable Clock" synchronization engine designed to prevent
+linear drift caused by Bluetooth buffer bloat (latency spikes).
 
 1. **device_time** (from make_timestamps):
-   - A t=0 relative timestamp based on the device's 256kHz clock.
-   - This clock has high precision but *skews* relative to the computer clock.
-   - This value is used internally for drift correction.
+   - A t=0 relative timestamp based on the device's 256kHz crystal oscillator.
+   - This clock is physically stable and accurate over short/medium durations.
 
 2. **lsl_now** (from local_clock()):
-   - The computer's LSL clock. This is our "ground truth" time.
+   - The computer's LSL clock (arrival time). This is subject to network jitter
+     and buffer bloat (asymmetric latency).
 
-3. **Correction Model**:
-   - We continuously fit a linear model: `lsl_time = a + (b * device_time)`
-   - `a` (intercept) and `b` (slope/skew) are updated with every new packet
-     using an efficient Recursive Least Squares (RLS) adaptive filter.
-   - The final `lsl_timestamps` pushed to LSL are the corrected values.
+3. **Correction Model (Physics-Constrained RLS)**:
+   - We fit a linear model: `lsl_time = offset + (slope * device_time)`
+   - **Crucial Difference:** Unlike standard regression, we **constrain the slope**
+     (clock speed) to remain near 1.0.
+   - **Why?** Pure regression misinterprets buffer bloat (late packets) as the
+     device clock "slowing down," causing runaway linear drift.
+   - **Result:** The filter effectively tracks the *offset* (intercept) while
+     ignoring temporary latency spikes, ensuring the LSL stream remains synchronized
+     with the "fastest" packets (minimum latency envelope).
 
 Packet Reordering Buffer - Critical Design Component:
 ------------------------------------------------------
@@ -55,7 +59,7 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 2. When buffer time limit reached, all buffered samples are:
    - Concatenated across packets/messages
    - **Sorted by device timestamp** (preserves device timing, corrects arrival order)
-   - **Timestamps already in LSL time domain** (no conversion needed)
+   - **Timestamps already in LSL time domain** (mapped via StableClock)
    - Pushed as a single chunk to LSL
 3. LSL receives samples in correct temporal order with device timing preserved
 
