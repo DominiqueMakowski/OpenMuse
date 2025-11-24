@@ -15,12 +15,12 @@ to map device sample counts to LSL time, correcting for clock drift.
 """
 
 import asyncio
-import struct
-from typing import List, Optional
+import numpy as np
+from typing import List, Optional, Callable
 from bleak import BleakClient, BleakScanner
 
-# from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
-# from .stream import StableClock
+from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
+from .stream import StableClock
 from .backends import BleakBackend
 
 
@@ -28,25 +28,18 @@ from .backends import BleakBackend
 # Find MAC addresses of BITalino devices
 # ===================================
 def find_bitalino(timeout=10, verbose=True):
-    """Scan for BITalino devices via Bluetooth Low Energy (BLE).
-
-    This uses the same BleakBackend as the Muse scanner, ensuring
-    cross-platform compatibility (Windows/MacOS/Linux).
-    """
-    # Use the same backend class imported in your file
+    """Scan for BITalino devices via Bluetooth Low Energy (BLE)."""
     backend = BleakBackend()
 
     if verbose:
         print(f"Searching for BITalinos (max. {timeout} seconds)...")
 
-    # Use the identical scan method
     devices = backend.scan(timeout=timeout)
     bitalinos = []
 
     for d in devices:
         name = d.get("name")
-        print("*Debug (remove me once we found pattern):Device found:", name)
-        # Filter specifically for BITalino devices
+        print("*Debug (remove me once we found pattern) - Device found:", name)
         try:
             if isinstance(name, str) and "bitalino" in name.lower():
                 bitalinos.append(d)
@@ -56,7 +49,6 @@ def find_bitalino(timeout=10, verbose=True):
     if verbose:
         if bitalinos:
             for b in bitalinos:
-                # Matches the print format of find_muse
                 print(f'Found device {b["name"]}, MAC Address {b["address"]}')
         else:
             print(
@@ -69,21 +61,28 @@ def find_bitalino(timeout=10, verbose=True):
 # ============================================================================
 # BITALINO DRIVER
 # ============================================================================
-
-
 class BITalino:
+    """
+    Async driver for BITalino (BLE).
+    """
+
     def __init__(self, address: str):
         self.address = address
         self.client: Optional[BleakClient] = None
-        self._queue = asyncio.Queue()
         self._running = False
         self._analog_channels = []
         self._frame_size = 0
 
-        # BITalino (BT121/BLE) Service & Characteristic UUIDs (based on https://github.com/BITalinoWorld/firmware-BT121/blob/master/GATT.xml)
-        self._UART_SERVICE = "c566488a-0882-4e1b-a6d0-0b717e652234"
+        # Callback for decoded samples (seq, digital..., analog...)
+        self._data_callback: Optional[Callable[[List[int]], None]] = None
+
+        # BITalino (BT121/BLE) Service & Characteristic UUIDs
         self._CMD_CHAR = "4051eb11-bf0a-4c74-8730-a48f4193fcea"  # Write
         self._DATA_CHAR = "40fdba6b-672e-47c4-808a-e529adff3633"  # Notify
+
+    def set_callback(self, callback: Callable[[List[int]], None]):
+        """Set a callback function to receive decoded samples immediately."""
+        self._data_callback = callback
 
     async def connect(self, timeout: float = 10.0):
         """Connects to the device and subscribes to the data stream."""
@@ -124,7 +123,7 @@ class BITalino:
 
         # 2. Calculate frame size (Protocol definition)
         if n_ch <= 4:
-            self._frame_size = int((12.0 + 10.0 * n_ch) / 8.0 + 0.99)  # ceil
+            self._frame_size = int((12.0 + 10.0 * n_ch) / 8.0 + 0.99)
         else:
             self._frame_size = int((52.0 + 6.0 * (n_ch - 4)) / 8.0 + 0.99)
 
@@ -137,10 +136,6 @@ class BITalino:
         for ch in self._analog_channels:
             cmd_start |= 1 << (2 + ch)
 
-        # Clear old data from queue
-        while not self._queue.empty():
-            self._queue.get_nowait()
-
         await self.client.write_gatt_char(self._CMD_CHAR, bytes([cmd_start]))
         self._running = True
 
@@ -151,28 +146,21 @@ class BITalino:
         await self.client.write_gatt_char(self._CMD_CHAR, bytes([0]))
         self._running = False
 
-    async def read(self, n_samples: int = 100) -> List[List[int]]:
-        """
-        Reads 'n' parsed frames from the buffer.
-        Returns list of lists: [[Seq, D0, D1, D2, D3, A1, A2...], ...]
-        """
-        data = []
-        for _ in range(n_samples):
-            # This awaits until data is available in the queue
-            data.append(await self._queue.get())
-        return data
-
     def _on_data_received(self, sender, data: bytearray):
         """Internal callback: Decodes raw bytes into samples."""
         if not self._running or len(data) != self._frame_size:
             return
 
-        # CRC Check (4-bit)
+        # --- CRC Check (4-bit) ---
+        # Note: This Python implementation is slow for 1000Hz but functional.
         crc = data[-1] & 0x0F
         check_byte = data[-1] & 0xF0
         x = 0
-        # Iterate over all bytes (simulating the hardware CRC calculation)
-        temp_data = list(data[:-1]) + [check_byte]
+
+        # Create a view of the data with the masked last byte for CRC calc
+        temp_data = bytearray(data[:-1])
+        temp_data.append(check_byte)
+
         for byte in temp_data:
             for bit in range(7, -1, -1):
                 x <<= 1
@@ -183,7 +171,7 @@ class BITalino:
         if crc != (x & 0x0F):
             return  # Drop corrupted frame
 
-        # Decode Protocol
+        # --- Decode Protocol ---
         seq = data[-1] >> 4
         digital = [
             (data[-2] >> 7) & 0x01,
@@ -209,108 +197,121 @@ class BITalino:
         if n_ch > 5:
             sample.append(data[-8] & 0x3F)
 
-        self._queue.put_nowait(sample)
+        # Send to callback if registered
+        if self._data_callback:
+            self._data_callback(sample)
 
 
 # ============================================================================
-# Stream
+# Streaming Logic
 # ============================================================================
 
 
-# def stream_bitalino(
-#     address: str,
-#     sampling_rate: int = 1000,
-#     analog_channels: list = [0, 1, 2, 3, 4, 5],
-#     chunk_size: int = 100,
-# ):
-#     """
-#     Stream data from BITalino to LSL.
+async def stream_bitalino(
+    address: str,
+    sampling_rate: int = 1000,
+    analog_channels: List[int] = [0, 1, 2, 3, 4, 5],
+    buffer_size: int = 32,
+):
+    """
+    Stream data from BITalino to LSL asynchronously.
 
-#     This function blocks until interrupted (Ctrl+C).
-#     """
+    Parameters:
+    - buffer_size: Number of samples to accumulate before pushing to LSL.
+                   BITalino sends 1 sample/pkt. Pushing 1000x/sec is inefficient.
+    """
 
-#     print(f"Connecting to BITalino at {address}...")
-#     try:
-#         device = BITalino(address)
-#         v = device.version()
-#         print(f"Connected. Device Version: {v}")
-#     except Exception as e:
-#         print(f"Failed to connect: {e}")
-#         raise ValueError(f"Failed to connect: {e}")
+    # 1. Setup LSL Stream Info
+    channel_names = ["SEQ", "D1", "D2", "D3", "D4"] + [
+        f"A{x+1}" for x in analog_channels
+    ]
+    n_channels = len(channel_names)
 
-#     # 1. Setup LSL Stream Info
-#     n_analog = len(analog_channels)
-#     # Total channels = Analog + 4 Digital (optional, included here for completeness)
-#     # Let's stream only Analog for cleaner output, or mix.
-#     # Standard: Stream everything.
-#     channel_names = ["SEQ", "D1", "D2", "D3", "D4"] + [
-#         f"A{x+1}" for x in analog_channels
-#     ]
-#     n_channels = len(channel_names)
+    info = StreamInfo(
+        name="BITalino",
+        stype="BioSignals",
+        n_channels=n_channels,
+        sfreq=float(sampling_rate),
+        dtype="float32",
+        source_id=f"bitalino_{address}",
+    )
 
-#     info = StreamInfo(
-#         name="BITalino",
-#         stype="BioSignals",
-#         n_channels=n_channels,
-#         sfreq=float(sampling_rate),
-#         dtype="float32",
-#         source_id=f"bitalino_{device.address}",
-#     )
+    desc = info.desc
+    desc.append_child_value("manufacturer", "PLUX")
+    channels = desc.append_child("channels")
+    for name in channel_names:
+        channels.append_child("channel").append_child_value("label", name)
 
-#     # Add metadata
-#     desc = info.desc
-#     channels = desc.append_child("channels")
-#     for name in channel_names:
-#         channels.append_child("channel").append_child_value("label", name)
+    outlet = StreamOutlet(info)
+    print(f"LSL Stream '{info.name}' created. Sample Rate: {sampling_rate}Hz")
 
-#     outlet = StreamOutlet(info)
-#     print(f"LSL Stream '{info.name}' created. Sample Rate: {sampling_rate}Hz")
+    # 2. State Management
+    device = BITalino(address)
+    clock = StableClock()
 
-#     # 2. Initialize Logic
-#     clock = StableClock()
-#     total_samples_read = 0
+    # Buffering state
+    sample_buffer = []
+    total_samples = 0
 
-#     try:
-#         device.start(sampling_rate, analog_channels)
-#         print("Acquisition started. Press Ctrl+C to stop.")
+    def _process_sample(sample: List[int]):
+        """
+        Callback triggered by the driver for every single sample.
+        Accumulates samples and pushes chunks to LSL.
+        """
+        nonlocal total_samples
 
-#         while True:
-#             # Blocking read from device
-#             # Note: This determines the loop cadence.
-#             # 100 samples @ 1000Hz = 100ms latency chunks.
-#             data = device.read(chunk_size)
+        sample_buffer.append(sample)
+        total_samples += 1
 
-#             # --- Timestamping Logic ---
-#             # 1. Get current LSL time (arrival time of the chunk)
-#             now = local_clock()
+        # Flush buffer when full
+        if len(sample_buffer) >= buffer_size:
+            lsl_now = local_clock()
 
-#             # 2. Determine "Device Time" of the *last* sample in this chunk
-#             #    Device time is purely based on sample count / rate
-#             current_chunk_len = data.shape[0]
-#             total_samples_read += current_chunk_len
+            # Convert buffer to numpy
+            chunk_data = np.array(sample_buffer, dtype=np.float32)
+            n_chunk = len(sample_buffer)
 
-#             device_time_end = total_samples_read / sampling_rate
+            # --- Timestamping (StableClock) ---
+            # 1. Device time is purely sample count / Rate
+            device_time_end = total_samples / sampling_rate
 
-#             # 3. Update the Clock Model (Drift Correction)
-#             clock.update(device_time_end, now)
+            # 2. Update Clock Model
+            #    We update using the arrival time of the *last* sample in the buffer
+            clock.update(device_time_end, lsl_now)
 
-#             # 4. Generate timestamps for the whole chunk retrospectively
-#             #    t[i] = device_time_start + i * dt
-#             chunk_device_times = (
-#                 (np.arange(current_chunk_len) - current_chunk_len + 1) / sampling_rate
-#             ) + device_time_end
+            # 3. Retroactively calculate timestamps for the whole chunk
+            #    t[i] = device_time_end - (n - 1 - i) / Rate
+            chunk_device_times = device_time_end - (
+                np.arange(n_chunk)[::-1] / sampling_rate
+            )
 
-#             # Map to LSL time using the corrected clock
-#             lsl_timestamps = clock.map_time(chunk_device_times)
+            # 4. Map to LSL time
+            lsl_timestamps = clock.map_time(chunk_device_times)
 
-#             # --- Push to LSL ---
-#             outlet.push_chunk(data.astype(np.float32), timestamp=lsl_timestamps)
+            # Push
+            outlet.push_chunk(chunk_data, timestamp=lsl_timestamps)
+            sample_buffer.clear()
 
-#     except KeyboardInterrupt:
-#         print("\nStreaming stopped by user.")
-#     except Exception as e:
-#         print(f"Error during streaming: {e}")
-#     finally:
-#         device.stop()
-#         device.close()
-#         print("Device disconnected.")
+    # 3. Connect and Start
+    try:
+        print(f"Connecting to BITalino at {address}...")
+        device.set_callback(_process_sample)
+        await device.connect()
+
+        print("Starting acquisition...")
+        await device.start(sampling_rate, analog_channels)
+
+        print("Streaming... Press Ctrl+C to stop.")
+        # Keep the loop alive
+        while True:
+            await asyncio.sleep(1)
+
+    except asyncio.CancelledError:
+        print("Streaming cancelled.")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        print("Stopping device...")
+        await device.stop()
+        await device.disconnect()
+        print("Disconnected.")

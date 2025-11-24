@@ -173,6 +173,30 @@ def main(argv=None):
 
     p_find_bitalino.set_defaults(func=handle_find_bitalino)
 
+    # stream_bitalino subcommand
+    p_stream_bitalino = subparsers.add_parser(
+        "stream_bitalino", help="Stream data from BITalino to LSL"
+    )
+    p_stream_bitalino.add_argument(
+        "--address", required=True, help="Device address (e.g., MAC on Windows)"
+    )
+
+    def handle_stream_bitalino(ns):
+        import asyncio
+        from .bitalino import stream_bitalino
+
+        asyncio.run(
+            stream_bitalino(
+                address=ns.address,
+                sampling_rate=1000,
+                analog_channels=[0, 1, 2, 3, 4, 5],
+                buffer_size=32,
+            )
+        )
+        return 0
+
+    p_stream_bitalino.set_defaults(func=handle_stream_bitalino)
+
     args = parser.parse_args(argv)
     try:
         return args.func(args)
