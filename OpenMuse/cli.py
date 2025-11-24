@@ -182,16 +182,32 @@ def main(argv=None):
     p_stream_bitalino.add_argument(
         "--address", required=True, help="Device address (e.g., MAC on Windows)"
     )
+    p_stream_bitalino.add_argument(
+        "--channels",
+        nargs=6,
+        metavar="CH",
+        help="Sensor types for the 6 analog channels (e.g., ECG EMG None ...). "
+        "Use 'None' or '0' for unused channels. "
+        "Available: ECG, EMG, EEG, EDA, ACC, LUX, RAW.",
+    )
 
     def handle_stream_bitalino(ns):
         import asyncio
         from .bitalino import stream_bitalino
 
+        # Prepare channels list: Convert CLI strings "None"/"0" to Python None
+        # If --channels is not provided, we pass None (driver defaults to all RAW)
+        channels_arg = None
+        if ns.channels:
+            channels_arg = [
+                None if c.lower() in ("none", "0", "null") else c for c in ns.channels
+            ]
+
         asyncio.run(
             stream_bitalino(
                 address=ns.address,
+                channels=channels_arg,
                 sampling_rate=1000,
-                analog_channels=[0, 1, 2, 3, 4, 5],
                 buffer_size=32,
             )
         )

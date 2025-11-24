@@ -277,8 +277,8 @@ class BITalino:
 
 async def stream_bitalino(
     address: str,
-    sampling_rate: int = 1000,
     channels: List[Optional[str]] = None,
+    sampling_rate: int = 1000,
     buffer_size: int = 32,
 ):
     """
