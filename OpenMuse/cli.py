@@ -159,6 +159,20 @@ def main(argv=None):
 
     p_view.set_defaults(func=handle_view)
 
+    # BITalino subcommands
+    p_find_bitalino = subparsers.add_parser(
+        "find_bitalino", help="Scan for BITalino devices"
+    )
+    _add_find_args(p_find_bitalino)
+
+    def handle_find_bitalino(ns):
+        from .bitalino import find_bitalino
+
+        find_bitalino(timeout=ns.timeout, verbose=True)
+        return 0
+
+    p_find_bitalino.set_defaults(func=handle_find_bitalino)
+
     args = parser.parse_args(argv)
     try:
         return args.func(args)
