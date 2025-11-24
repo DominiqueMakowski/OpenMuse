@@ -9,6 +9,7 @@ devices.
 
 This module connects to a BITalino device via Bluetooth/Serial and streams
 data over LSL (Lab Streaming Layer) with high-precision timestamping.
+The code is inspired by https://github.com/BITalinoWorld/revolution-python-api
 
 It utilizes the StableClock RLS filter (identical to the Muse implementation)
 to map device sample counts to LSL time, correcting for clock drift.
@@ -20,8 +21,11 @@ from typing import List, Optional, Callable
 from bleak import BleakClient, BleakScanner
 
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
+from mne_lsl.stream import StreamLSL
 from .stream import StableClock
 from .backends import BleakBackend
+from .view import FastViewer
+from .utils import configure_lsl_api_cfg
 
 
 # ===================================
@@ -61,10 +65,44 @@ def find_bitalino(timeout=10, verbose=True):
 # ============================================================================
 # BITALINO DRIVER
 # ============================================================================
+def generate_crc4_table() -> List[int]:
+    """
+    Generates a 4096-entry lookup table for the BITalino 4-bit CRC.
+    Index = (Current_CRC << 8) | New_Byte
+    Value = New_CRC
+    """
+    table = [0] * 4096
+
+    # Iterate over every possible current CRC state (0-15)
+    for current_crc in range(16):
+        # Iterate over every possible incoming byte (0-255)
+        for byte_val in range(256):
+
+            x = current_crc
+
+            # --- The Original "Slow" Loop ---
+            # We run this ONCE per combination at startup
+            for bit in range(7, -1, -1):
+                x <<= 1
+                if x & 0x10:
+                    x ^= 0x03
+                x ^= (byte_val >> bit) & 0x01
+            # --------------------------------
+
+            # Calculate the index for this pair
+            index = (current_crc << 8) | byte_val
+            table[index] = x & 0x0F
+
+    return table
+
+
 class BITalino:
     """
     Async driver for BITalino (BLE).
     """
+
+    # Generate table at class level (shared by all instances) so we only do it once
+    _CRC_TABLE = generate_crc4_table()
 
     def __init__(self, address: str):
         self.address = address
@@ -151,22 +189,22 @@ class BITalino:
         if not self._running or len(data) != self._frame_size:
             return
 
-        # --- CRC Check (4-bit) ---
-        # Note: This Python implementation is slow for 1000Hz but functional.
+        # --- Fast CRC Check (Lookup Table) ---
         crc = data[-1] & 0x0F
         check_byte = data[-1] & 0xF0
+
+        # Start with CRC 0
         x = 0
 
-        # Create a view of the data with the masked last byte for CRC calc
-        temp_data = bytearray(data[:-1])
-        temp_data.append(check_byte)
+        # 1. Process the main data bytes
+        for byte in data[:-1]:
+            # Lookup: (Current CRC << 8) | New Byte
+            index = (x << 8) | byte
+            x = self._CRC_TABLE[index]
 
-        for byte in temp_data:
-            for bit in range(7, -1, -1):
-                x <<= 1
-                if x & 0x10:
-                    x ^= 0x03
-                x ^= (byte >> bit) & 0x01
+        # 2. Process the final check byte (masked)
+        index = (x << 8) | check_byte
+        x = self._CRC_TABLE[index]
 
         if crc != (x & 0x0F):
             return  # Drop corrupted frame
@@ -315,3 +353,83 @@ async def stream_bitalino(
         await device.stop()
         await device.disconnect()
         print("Disconnected.")
+
+
+# ============================================================================
+# BITALINO VIEWER
+# ============================================================================
+class BitalinoViewer(FastViewer):
+    """
+    Subclass of FastViewer adapted for BITalino.
+    Overrides channel setup to filter for Analog (A1-A6) channels
+    and sets appropriate 10-bit ranges.
+    """
+
+    def _setup_channels(self):
+        self.ch_configs = []
+
+        # Distinct high-contrast colors for up to 6 analog channels
+        colors = [
+            (1.0, 0.3, 0.3),  # Red
+            (0.2, 1.0, 0.2),  # Green
+            (0.3, 0.5, 1.0),  # Blue
+            (1.0, 1.0, 0.0),  # Yellow
+            (0.0, 1.0, 1.0),  # Cyan
+            (1.0, 0.0, 1.0),  # Magenta
+        ]
+
+        for s_idx, stream in enumerate(self.streams):
+            # Inspect all channels in the stream
+            for ch_i, name in enumerate(stream.info["ch_names"]):
+
+                # Filter: BITalino sends [SEQ, D1-D4, A1-An].
+                # We only want to visualize "A" (Analog) channels.
+                if not name.startswith("A"):
+                    continue
+
+                # Determine color index from name "A1" -> 0
+                try:
+                    c_idx = int(name[1:]) - 1
+                except ValueError:
+                    c_idx = ch_i
+
+                col = colors[c_idx % len(colors)]
+
+                self.ch_configs.append(
+                    {
+                        "stream_idx": s_idx,
+                        "ch_idx": ch_i,
+                        "name": name,
+                        "color": col,
+                        # BITalino is 10-bit (0-1023).
+                        # Range 1024 covers the full raw signal swing.
+                        "base_range": 1024.0,
+                        "scale": 1.0,
+                        # Center the plot at the mid-rail (512)
+                        "mean": 512.0,
+                        "type": "BIO",
+                    }
+                )
+
+
+def view_bitalino(stream_name="BITalino", window_size=10.0):
+    """
+    Connects to a BITalino LSL stream and opens the viewer.
+    """
+    configure_lsl_api_cfg()
+
+    print(f"Looking for LSL stream: '{stream_name}'...")
+    try:
+        # bufsize defines the internal buffer of the StreamLSL object
+        s = StreamLSL(bufsize=window_size, name=stream_name)
+        s.connect(timeout=5.0)
+    except Exception as e:
+        print(f"Error: Could not connect to stream '{stream_name}'.")
+        print("Ensure bitalino.py is running and streaming.")
+        return
+
+    print(f"Connected to {s.info['n_channels']} channels.")
+
+    # Instantiate the specialized viewer
+    v = BitalinoViewer([s], window_size=window_size)
+    v.show()

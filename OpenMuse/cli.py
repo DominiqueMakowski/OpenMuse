@@ -159,7 +159,9 @@ def main(argv=None):
 
     p_view.set_defaults(func=handle_view)
 
+    # ===============================================
     # BITalino subcommands
+    # ===============================================
     p_find_bitalino = subparsers.add_parser(
         "find_bitalino", help="Scan for BITalino devices"
     )
@@ -196,6 +198,38 @@ def main(argv=None):
         return 0
 
     p_stream_bitalino.set_defaults(func=handle_stream_bitalino)
+
+    # view_bitalino subcommand
+    p_view_bitalino = subparsers.add_parser(
+        "view_bitalino",
+        help="Visualize BITalino data from LSL streams in real-time",
+    )
+    p_view_bitalino.add_argument(
+        "--stream-name",
+        default="BITalino",
+        help="Name of the LSL stream to visualize (default: BITalino)",
+    )
+    p_view_bitalino.add_argument(
+        "--window",
+        "-w",
+        type=float,
+        default=10.0,
+        help="Time window to display in seconds (default: 10.0)",
+    )
+
+    def handle_view_bitalino(ns):
+        from .bitalino import view_bitalino
+
+        if ns.window <= 0:
+            parser.error("--window must be positive")
+        view_bitalino(
+            stream_name=ns.stream_name,
+            window_size=ns.window,
+        )
+        return 0
+
+    p_view_bitalino.set_defaults(func=handle_view_bitalino)
+    # ===============================================
 
     args = parser.parse_args(argv)
     try:
