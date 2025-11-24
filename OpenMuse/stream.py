@@ -251,7 +251,7 @@ class SensorStream:
 
     # --- Stable Clock Sync ---
     clock: StableClock = field(default_factory=StableClock)
-    last_update_device_time: float = 0.0
+    last_update_device_time: float = -1.0
 
 
 def create_stream_outlet(

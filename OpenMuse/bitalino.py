@@ -17,6 +17,7 @@ to map device sample counts to LSL time, correcting for clock drift.
 
 import asyncio
 import numpy as np
+import traceback
 from typing import List, Optional, Callable
 from bleak import BleakClient, BleakScanner
 
@@ -28,9 +29,9 @@ from .view import FastViewer
 from .utils import configure_lsl_api_cfg
 
 
-# ===================================
-# Find MAC addresses of BITalino devices
-# ===================================
+# ============================================================================
+# Find BITalino devices
+# ============================================================================
 def find_bitalino(timeout=10, verbose=True):
     """Scan for BITalino devices via Bluetooth Low Energy (BLE)."""
     backend = BleakBackend()
@@ -43,7 +44,6 @@ def find_bitalino(timeout=10, verbose=True):
 
     for d in devices:
         name = d.get("name")
-        print("*Debug (remove me once we found pattern) - Device found:", name)
         try:
             if isinstance(name, str) and "bitalino" in name.lower():
                 bitalinos.append(d)
@@ -63,6 +63,47 @@ def find_bitalino(timeout=10, verbose=True):
 
 
 # ============================================================================
+# BITalino Transfer Functions
+# - https://github.com/pluxbiosignals/biosignalsnotebooks
+# - https://github.com/pluxbiosignals/opensignals-samples
+# ============================================================================
+BITALINO_SENSORS = {
+    "ECG": {
+        "unit": "mV",
+        # V = ((ADC/1024 - 0.5) * 3.3) / Gain * 1000 (to mV)
+        "func": lambda x: (((x / 1024.0) - 0.5) * 3.3 / 1100) * 1000.0,
+        "range": 1.5,
+    },
+    "EMG": {
+        "unit": "mV",
+        "func": lambda x: (((x / 1024.0) - 0.5) * 3.3 / 1009) * 1000.0,
+        "range": 1.65,
+    },
+    "EEG": {
+        "unit": "uV",
+        "func": lambda x: (((x / 1024.0) - 0.5) * 3.3 / 40000) * 1e6,  # Gain 40,000
+        "range": 40.0,
+    },
+    "EDA": {
+        "unit": "uS",
+        # EDA (uS) = (ADC / 2^n) * VCC / 0.132
+        "func": lambda x: (x / 1024.0) * 3.3 / 0.132,
+        "range": 25.0,
+    },
+    "ACC": {
+        "unit": "g",
+        # Accelerometer usually centered at 512 for 0g. Range -3g to 3g approx.
+        # Simplified normalization: (ADC - min) / (max - min) * 2 - 1
+        "func": lambda x: ((x - 0) / (1023 - 0) * 2 - 1) * 3.0,
+        "range": 3.0,
+    },
+    "LUX": {"unit": "%", "func": lambda x: (x / 1024.0) * 100.0, "range": 100.0},
+    # Default for unknown or None
+    "RAW": {"unit": "raw", "func": lambda x: x, "range": 1024.0},
+}
+
+
+# ============================================================================
 # BITALINO DRIVER
 # ============================================================================
 def generate_crc4_table() -> List[int]:
@@ -72,27 +113,16 @@ def generate_crc4_table() -> List[int]:
     Value = New_CRC
     """
     table = [0] * 4096
-
-    # Iterate over every possible current CRC state (0-15)
     for current_crc in range(16):
-        # Iterate over every possible incoming byte (0-255)
         for byte_val in range(256):
-
             x = current_crc
-
-            # --- The Original "Slow" Loop ---
-            # We run this ONCE per combination at startup
             for bit in range(7, -1, -1):
                 x <<= 1
                 if x & 0x10:
                     x ^= 0x03
                 x ^= (byte_val >> bit) & 0x01
-            # --------------------------------
-
-            # Calculate the index for this pair
             index = (current_crc << 8) | byte_val
             table[index] = x & 0x0F
-
     return table
 
 
@@ -101,7 +131,7 @@ class BITalino:
     Async driver for BITalino (BLE).
     """
 
-    # Generate table at class level (shared by all instances) so we only do it once
+    # Generate table at class level (shared by all instances)
     _CRC_TABLE = generate_crc4_table()
 
     def __init__(self, address: str):
@@ -248,7 +278,7 @@ class BITalino:
 async def stream_bitalino(
     address: str,
     sampling_rate: int = 1000,
-    analog_channels: List[int] = [0, 1, 2, 3, 4, 5],
+    channels: List[Optional[str]] = None,
     buffer_size: int = 32,
 ):
     """
@@ -256,19 +286,50 @@ async def stream_bitalino(
 
     Parameters:
     - buffer_size: Number of samples to accumulate before pushing to LSL.
-                   BITalino sends 1 sample/pkt. Pushing 1000x/sec is inefficient.
+    - channels: List of length 6. e.g. ['ECG', None, 'EDA', None, None, None]
     """
 
-    # 1. Setup LSL Stream Info
-    channel_names = ["SEQ", "D1", "D2", "D3", "D4"] + [
-        f"A{x+1}" for x in analog_channels
-    ]
-    n_channels = len(channel_names)
+    # 1. Validate Sensor Types
+    if channels:
+        if len(channels) != 6:
+            raise ValueError(
+                "Length of 'channels' must be 6. Include 'None' for unused."
+            )
+    else:
+        # Fill with "RAW" if not provided to activate all
+        channels = ["RAW"] * 6
+
+    # --- Identify Active Channels ---
+    # Convert ['ECG', None, ...] to indices [0, ...]
+    active_channels = [i for i, x in enumerate(channels) if x is not None]
+
+    # 2. Setup LSL Stream Info with Correct Names and Units
+    # ---------------------------------------------------
+    # Start with Digital Channels
+    channel_names = ["SEQ", "D1", "D2", "D3", "D4"]
+    channel_units = ["raw"] * 5
+
+    # Append Analog Channels (We always create 6 slots in LSL A1-A6)
+    for ch_idx, s_type in enumerate(channels):
+        if s_type and s_type.upper() in BITALINO_SENSORS:
+            # e.g. "A1_ECG"
+            name = f"A{ch_idx+1}_{s_type.upper()}"
+            unit = BITALINO_SENSORS[s_type.upper()]["unit"]
+        else:
+            # e.g. "A1"
+            name = f"A{ch_idx+1}"
+            unit = "raw"
+
+        channel_names.append(name)
+        channel_units.append(unit)
+
+    # 1 SEQ + 4 DIG + 6 ANALOG = 11 Channels
+    n_channels_lsl = len(channel_names)
 
     info = StreamInfo(
         name="BITalino",
         stype="BioSignals",
-        n_channels=n_channels,
+        n_channels=n_channels_lsl,
         sfreq=float(sampling_rate),
         dtype="float32",
         source_id=f"bitalino_{address}",
@@ -276,12 +337,18 @@ async def stream_bitalino(
 
     desc = info.desc
     desc.append_child_value("manufacturer", "PLUX")
-    channels = desc.append_child("channels")
-    for name in channel_names:
-        channels.append_child("channel").append_child_value("label", name)
+    channels_desc = desc.append_child("channels")
+    for name, unit in zip(channel_names, channel_units):
+        ch = channels_desc.append_child("channel")
+        ch.append_child_value("label", name)
+        ch.append_child_value("unit", unit)
+        ch.append_child_value("type", "EEG" if "EEG" in name else "Biosignals")
 
     outlet = StreamOutlet(info)
-    print(f"LSL Stream '{info.name}' created. Sample Rate: {sampling_rate}Hz")
+    print(
+        f"LSL Stream '{info.name}' created. Channels: {channel_names}. "
+        f"Active Device indices: {active_channels}"
+    )
 
     # 2. State Management
     device = BITalino(address)
@@ -305,20 +372,46 @@ async def stream_bitalino(
         if len(sample_buffer) >= buffer_size:
             lsl_now = local_clock()
 
-            # Convert buffer to numpy
-            chunk_data = np.array(sample_buffer, dtype=np.float32)
-            n_chunk = len(sample_buffer)
+            # The raw data only contains [SEQ, D1-D4, + Active Analog Channels]
+            raw_chunk = np.array(sample_buffer, dtype=np.float32)
+            n_chunk = len(raw_chunk)
+
+            # We need to map this to the full LSL width (11 columns)
+            full_chunk = np.zeros((n_chunk, n_channels_lsl), dtype=np.float32)
+
+            # 1. Copy SEQ and Digital (First 5 columns are always present)
+            full_chunk[:, 0:5] = raw_chunk[:, 0:5]
+
+            # 2. Map Active Analog Channels
+            # raw_chunk starts analog data at index 5
+            # LSL starts analog data at index 5
+            current_raw_col = 5
+
+            for ch_idx in active_channels:
+                s_type = channels[ch_idx]
+
+                # Get the column from the compressed driver packet
+                data_col = raw_chunk[:, current_raw_col]
+
+                # Apply Transfer Function
+                if s_type and s_type.upper() in BITALINO_SENSORS:
+                    tf = BITALINO_SENSORS[s_type.upper()]["func"]
+                    data_col = tf(data_col)
+
+                # Place into the correct LSL column (5 + actual index A1..A6)
+                lsl_col_idx = 5 + ch_idx
+                full_chunk[:, lsl_col_idx] = data_col
+
+                current_raw_col += 1
 
             # --- Timestamping (StableClock) ---
             # 1. Device time is purely sample count / Rate
             device_time_end = total_samples / sampling_rate
 
             # 2. Update Clock Model
-            #    We update using the arrival time of the *last* sample in the buffer
             clock.update(device_time_end, lsl_now)
 
             # 3. Retroactively calculate timestamps for the whole chunk
-            #    t[i] = device_time_end - (n - 1 - i) / Rate
             chunk_device_times = device_time_end - (
                 np.arange(n_chunk)[::-1] / sampling_rate
             )
@@ -327,7 +420,7 @@ async def stream_bitalino(
             lsl_timestamps = clock.map_time(chunk_device_times)
 
             # Push
-            outlet.push_chunk(chunk_data, timestamp=lsl_timestamps)
+            outlet.push_chunk(full_chunk, timestamp=lsl_timestamps)
             sample_buffer.clear()
 
     # 3. Connect and Start
@@ -337,7 +430,8 @@ async def stream_bitalino(
         await device.connect()
 
         print("Starting acquisition...")
-        await device.start(sampling_rate, analog_channels)
+        # Start only the active channels
+        await device.start(sampling_rate, active_channels)
 
         print("Streaming... Press Ctrl+C to stop.")
         # Keep the loop alive
@@ -348,6 +442,7 @@ async def stream_bitalino(
         print("Streaming cancelled.")
     except Exception as e:
         print(f"Error: {e}")
+        traceback.print_exc()
     finally:
         print("Stopping device...")
         await device.stop()
@@ -387,10 +482,11 @@ class BitalinoViewer(FastViewer):
                 if not name.startswith("A"):
                     continue
 
-                # Determine color index from name "A1" -> 0
+                # Determine color index from name "A1" or "A1_ECG"
                 try:
-                    c_idx = int(name[1:]) - 1
-                except ValueError:
+                    # Remove 'A', split by '_', take first part "1", subtract 1 -> 0
+                    c_idx = int(name[1:].split("_")[0]) - 1
+                except (ValueError, IndexError):
                     c_idx = ch_i
 
                 col = colors[c_idx % len(colors)]
