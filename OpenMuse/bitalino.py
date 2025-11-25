@@ -45,6 +45,7 @@ def find_bitalino(timeout=10, verbose=True):
 
     for d in devices:
         name = d.get("name")
+        print(f"DEBUG: Found device: {name}, address: {d.get('address')}")
         try:
             if isinstance(name, str) and "bitalino" in name.lower():
                 bitalinos.append(d)
