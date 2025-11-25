@@ -134,7 +134,7 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Union, TextIO
-
+from collections import deque
 import bleak
 from bleak.exc import BleakError
 import numpy as np
@@ -179,12 +179,12 @@ class StableClock:
         self.theta = np.array([1.0, 0.0])
 
         # Initialize Covariance:
-        # P[0,0] (Slope Variance): Set extremely low (1e-10).
-        #   -> We are 99.99% sure the Muse clock is running at real-time speed.
+        # P[0,0] (Slope Variance): Set low (0.01).
+        #   -> We are quite sure the Muse clock is running at real-time speed.
         # P[1,1] (Intercept Variance): Set high (1000).
         #   -> We have no idea what the initial offset is.
         self.P = np.zeros((2, 2))
-        self.P[0, 0] = 1e-10
+        self.P[0, 0] = 0.01
         self.P[1, 1] = 1000.0
 
         self.initialized = False
@@ -236,6 +236,87 @@ class StableClock:
         return intercept + (slope * device_times)
 
 
+class WindowedClock:
+    """
+    A robust clock synchronizer using a sliding window.
+
+    It fits a linear regression (Time_LSL = slope * Time_Device + intercept)
+    over a history window (e.g., 30 seconds).
+    """
+
+    def __init__(self, window_len_sec: float = 30.0):
+        self.window_len = window_len_sec
+        self.history = deque()  # Stores (device_time, lsl_time)
+
+        # Current model state [slope, intercept]
+        # Default to slope=1.0, intercept=0.0 until initialized
+        self.slope = 1.0
+        self.intercept = 0.0
+        self.initialized = False
+
+        # Optimization: Don't re-fit on every single packet
+        self.last_fit_time = 0.0
+        self.fit_interval = 1.0  # Re-calculate fit once per second
+
+    def update(self, device_time: float, lsl_now: float):
+        """Add a new time measurement and update the model."""
+
+        # 1. Add new point
+        self.history.append((device_time, lsl_now))
+
+        # 2. Prune old history (keep only window_len seconds)
+        # We assume monotonic time; prune from left
+        limit = device_time - self.window_len
+        while self.history and self.history[0][0] < limit:
+            self.history.popleft()
+
+        # 3. Fit model (only periodically to save CPU)
+        if not self.initialized or (lsl_now - self.last_fit_time) > self.fit_interval:
+            self._fit()
+            self.last_fit_time = lsl_now
+            self.initialized = True
+
+    def _fit(self):
+        """Perform linear regression on the history buffer."""
+        n = len(self.history)
+        if n < 10:
+            return  # Not enough data yet
+
+        # Convert to numpy for fast vectorized math
+        data = np.array(self.history)
+        x = data[:, 0]  # Device Time
+        y = data[:, 1]  # LSL Time
+
+        # Robustness: We ideally want to fit to the 'fastest' packets (lowest latency)
+        # But a simple linear fit on the mean is usually sufficient for Muse.
+        # We center x to improve numerical stability of polyfit
+        x_mean = np.mean(x)
+        y_mean = np.mean(y)
+
+        # Fit line: y = mx + c
+        # Slope m = sum((x - x_mean)(y - y_mean)) / sum((x - x_mean)^2)
+        x_centered = x - x_mean
+        y_centered = y - y_mean
+
+        denom = np.sum(x_centered**2)
+        if denom < 1e-9:
+            return  # Avoid division by zero if all timestamps are identical
+
+        self.slope = np.sum(x_centered * y_centered) / denom
+        self.intercept = y_mean - (self.slope * x_mean)
+
+    def map_time(self, device_times: np.ndarray) -> np.ndarray:
+        """Transform device timestamps to LSL time using current model."""
+        if not self.initialized:
+            # Fallback for first few packets: just offset by current diff
+            if len(self.history) > 0:
+                dt, lt = self.history[-1]
+                return device_times + (lt - dt)
+            return device_times
+
+        return self.intercept + (self.slope * device_times)
+
+
 @dataclass
 class SensorStream:
     """Holds the LSL outlet and a buffer for a single sensor stream."""
@@ -250,7 +331,8 @@ class SensorStream:
     sample_counter: int = 0
 
     # --- Stable Clock Sync ---
-    clock: StableClock = field(default_factory=StableClock)
+    clock: WindowedClock = field(default_factory=WindowedClock)
+    # clock: StableClock = field(default_factory=StableClock)
     last_update_device_time: float = -1.0
 
 

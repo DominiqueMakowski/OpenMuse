@@ -1,64 +1,63 @@
 """
-High-performance Real-time LSL Viewer using VisPy + GLOO.
-Optimized with Ring Buffers and GPU-side normalization.
+Robust OpenMuse Viewer (Visual Enhanced)
+========================================
+Architecture: GPU Ring Buffer with Master Clock Synchronization.
+Features:
+- Synchronization: Upsamples aux streams to match EEG.
+- Stability: EMA for DC offset removal.
+- Performance: Static Ring Buffer (Low CPU).
+- Visuals: Battery Indicator, Y-Axis Ticks, Detailed Grid, Signal Quality.
 """
 
-import os
 import time
-import warnings
-from typing import Dict, List, Optional
-
 import numpy as np
-from mne_lsl.stream import StreamLSL
 from vispy import app, gloo
 from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
-
 from .utils import configure_lsl_api_cfg
 
-# Enable high-DPI scaling
-os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
-
-# --- Shaders ----------------------------------------------------------------
+# --- SIGNAL SHADERS ---
 VERT_SHADER = """
 #version 120
+attribute float a_position;      
+attribute vec3 a_index;          
+attribute vec3 a_color;          
+attribute float a_y_scale;       
 
-attribute float a_position;       // Raw signal value
-attribute vec2 a_index;           // (channel_index, sample_index)
-attribute vec3 a_color;
-attribute float a_y_scale;        // User zoom level
-attribute float a_y_mean;         // DC offset (calculated on CPU)
-attribute float a_y_range;        // Vertical range (calculated on CPU)
-
-uniform float u_offset;           // Ring buffer write pointer (head)
-uniform vec2 u_size;              // (n_channels, n_samples)
-uniform mat4 u_projection;
+uniform float u_offset;          
+uniform vec2 u_scale;            
+uniform vec2 u_size;             
+uniform float u_n_samples;       
+uniform mat4 u_projection;       
 
 varying vec4 v_color;
 
 void main() {
-    // 1. Ring Buffer Scrolling Logic
+    float channel_idx = a_index.x;
     float sample_idx = a_index.y;
-    // Calculate relative index so the newest sample (at u_offset) is at x=1.0
-    float relative_idx = mod(sample_idx - u_offset + u_size.y, u_size.y);
+    
+    // Ring Buffer Logic
+    float current_x = mod(sample_idx - u_offset + u_n_samples, u_n_samples);
+    
+    // Margins
+    float margin_left = 0.12;   // Increased for Y-ticks
+    float margin_right = 0.05;
+    float plot_width = 1.0 - margin_left - margin_right;
+    
+    float x = margin_left + plot_width * (current_x / u_n_samples);
 
-    // X Layout: 12% left margin, 5% right margin
-    float x_margin_left = 0.12;
-    float x_margin_right = 0.05;
-    float x_width = 1.0 - x_margin_left - x_margin_right;
-    float x = x_margin_left + (relative_idx / u_size.y) * x_width;
-
-    // 2. Y Layout & Normalization
-    float ch_idx = a_index.x;
-    float y_bottom_margin = 0.03;
-    float y_height = (1.0 - y_bottom_margin) / u_size.x;
-    float y_center = y_bottom_margin + (ch_idx * y_height) + (y_height * 0.5);
-
-    // Normalize raw data to [-1, 1] based on range/mean, then scale to channel slot
-    float norm_val = 2.0 * (a_position - a_y_mean) / a_y_range;
-    float y = y_center + (norm_val * y_height * 0.35 * a_y_scale);
-
-    gl_Position = u_projection * vec4(x, y, 0.0, 1.0);
+    // Y position (Stacking)
+    float margin_bottom = 0.05;
+    float plot_height = 1.0 - margin_bottom;
+    
+    float slot_height = plot_height / u_size.x;
+    float slot_bottom = margin_bottom + (channel_idx * slot_height);
+    float slot_center = slot_bottom + (slot_height * 0.5);
+    
+    // Scale: 0.45 leaves 10% padding between channels
+    float y = slot_center + (a_position * slot_height * 0.45 * a_y_scale);
+    
+    gl_Position = u_projection * vec4(x * u_scale.x, y, 0.0, 1.0);
     v_color = vec4(a_color, 1.0);
 }
 """
@@ -69,375 +68,596 @@ varying vec4 v_color;
 void main() { gl_FragColor = v_color; }
 """
 
+# --- BATTERY SHADERS ---
+BAT_VERT = """
+attribute vec2 a_position;
+uniform mat4 u_projection;
+void main() {
+    gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
+}
+"""
+BAT_FRAG = """
+uniform vec4 u_color;
+void main() {
+    gl_FragColor = u_color;
+}
+"""
 
-class FastViewer:
-    def __init__(self, streams: List[StreamLSL], window_duration: float = 10.0, verbose: bool = True):
+
+class RealtimeViewer:
+    def __init__(
+        self, streams, window_duration=10.0, update_interval=0.02, verbose=True
+    ):
         self.streams = streams
         self.window_duration = window_duration
         self.verbose = verbose
+        self.start_time = time.time()
 
-        # 0. Find Battery Stream
-        self.bat_stream = next((s for s in streams if "BATTERY" in s.name), None)
+        # --- 1. Channel Configuration ---
+        self.channel_info = []
+        self.total_channels = 0
+        self.battery_stream_idx = None
+        self.battery_level = None  # 0-100
 
-        # 1. Configuration & Layout
-        self._setup_channels()
+        # Colors
+        colors_eeg = [(0, 1, 1), (0, 0.5, 1), (0, 0, 1), (0.5, 0, 1)]  # Cyans/Blues
+        color_acc = (0.6, 0.8, 0.2)  # Greenish
+        color_gyro = (0.8, 0.6, 0.2)  # Orangeish
+        color_opt = (1, 0, 0)  # Red
 
-        # 2. Buffers
-        if not self.streams:
-            raise RuntimeError("No LSL streams available to view.")
+        # Identify streams
+        max_sfreq = 0
+        self.master_stream_idx = 0
 
-        max_sfreq = max(s.info["sfreq"] for s in streams)
-        self.n_samples = int(max_sfreq * window_duration)
-        self.total_channels = len(self.ch_configs)
+        for s_idx, stream in enumerate(streams):
+            s_name = stream.name
 
-        # The Main Ring Buffer: (n_samples, n_channels)
-        self.ring_buffer = np.zeros((self.n_samples, self.total_channels), dtype=np.float32)
-        self.write_ptr = 0
-        self.last_timestamps = [0.0] * len(streams)
+            # Handle Battery Stream Separately
+            if "BATTERY" in s_name.upper():
+                self.battery_stream_idx = s_idx
+                continue
 
-        # Optimization: Pre-map stream index to list of (buffer_col_idx, stream_channel_idx)
-        # This removes the O(N^2) loop in on_timer
-        self.stream_map: Dict[int, List[tuple]] = {i: [] for i in range(len(streams))}
-        for col_idx, cfg in enumerate(self.ch_configs):
-            s_idx = cfg["stream_idx"]
-            s_ch_idx = cfg["ch_idx"]
-            self.stream_map[s_idx].append((col_idx, s_ch_idx))
+            sfreq = stream.info["sfreq"]
+            if sfreq > max_sfreq:
+                max_sfreq = sfreq
+                self.master_stream_idx = s_idx
 
-        # 3. VisPy Canvas
-        self.canvas = app.Canvas(
-            title=f"OpenMuse ({self.total_channels} ch)",
-            keys="interactive",
-            size=(1400, 900),
+            is_eeg = "EEG" in s_name.upper()
+
+            for ch_i, ch_name in enumerate(stream.info.ch_names):
+                if is_eeg:
+                    col = colors_eeg[ch_i % 4]
+                    rng = 800.0  # uV
+                elif "ACC" in ch_name:
+                    col = color_acc
+                    rng = 2.0  # G
+                elif "GYRO" in ch_name:
+                    col = color_gyro
+                    rng = 300.0  # deg/s
+                else:
+                    col = color_opt
+                    rng = 1000.0
+
+                self.channel_info.append(
+                    {
+                        "stream_idx": s_idx,
+                        "ch_idx": ch_i,
+                        "name": ch_name,
+                        "color": col,
+                        "range": rng,  # Full span (Top - Bottom)
+                        "scale": 1.0,
+                        "is_eeg": is_eeg,
+                        "data_idx": self.total_channels,
+                        "dc_offset": 0.0,
+                        "quality_buf": [],
+                    }
+                )
+                self.total_channels += 1
+
+        self.master_sfreq = max_sfreq
+        self.n_samples = int(self.window_duration * self.master_sfreq)
+
+        if verbose:
+            print(f"Viewer Configured: {self.total_channels} signal channels.")
+            if self.battery_stream_idx is not None:
+                print("  + Battery Stream detected.")
+
+        # --- 2. GPU Memory (Ring Buffer) ---
+        self.data_buffer = np.zeros(
+            (self.n_samples, self.total_channels), dtype=np.float32
         )
+        self.write_ptr = 0
+        self.last_timestamps = {i: 0.0 for i in range(len(streams))}
+
+        # --- 3. VisPy Setup ---
+        self.canvas = app.Canvas(
+            title="OpenMuse Realtime", keys="interactive", size=(1400, 900)
+        )
+
+        # Signal Program
+        self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
+        ch_indices = np.repeat(np.arange(self.total_channels), self.n_samples)
+        sa_indices = np.tile(np.arange(self.n_samples), self.total_channels)
+        self.program["a_index"] = np.c_[
+            ch_indices, sa_indices, np.zeros_like(ch_indices)
+        ].astype(np.float32)
+        colors_flat = np.array(
+            [c["color"] for c in self.channel_info], dtype=np.float32
+        )
+        self.program["a_color"] = np.repeat(colors_flat, self.n_samples, axis=0)
+        self.program["a_y_scale"] = np.ones(
+            self.total_channels * self.n_samples, dtype=np.float32
+        )
+        self.vbo_pos = gloo.VertexBuffer(self.data_buffer.T.ravel().astype(np.float32))
+        self.program["a_position"] = self.vbo_pos
+        self.program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+        self.program["u_size"] = (float(self.total_channels), 1.0)
+        self.program["u_n_samples"] = float(self.n_samples)
+        self.program["u_offset"] = 0.0
+        self.program["u_scale"] = (1.0, 1.0)
+
+        # Battery Programs
+        self.bat_prog_bg = gloo.Program(BAT_VERT, BAT_FRAG)
+        self.bat_prog_fill = gloo.Program(BAT_VERT, BAT_FRAG)
+        self._bat_bg_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
+        self._bat_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
+        self.bat_prog_bg["a_position"] = self._bat_bg_vbo
+        self.bat_prog_fill["a_position"] = self._bat_fill_vbo
+
+        # Grid Program
+        self.prog_grid = gloo.Program(
+            "attribute vec2 pos; uniform mat4 proj; void main() { gl_Position = proj * vec4(pos, 0.0, 1.0); }",
+            "uniform vec4 color; void main() { gl_FragColor = color; }",
+        )
+        self.prog_grid["proj"] = ortho(0, 1, 0, 1, -1, 1)
+
+        # --- 4. Visual Elements ---
+        self._init_labels()
+        self._init_grid_lines()
+
+        # Events
         self.canvas.events.draw.connect(self.on_draw)
         self.canvas.events.resize.connect(self.on_resize)
         self.canvas.events.mouse_wheel.connect(self.on_mouse_wheel)
 
-        # 4. GLOO Setup
-        self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
-        self._init_gloo_data()
+        # Timer
+        self.timer = app.Timer(update_interval, connect=self.on_timer, start=True)
+        # Force initial resize to set battery bar positions
+        self.on_resize(type("Event", (object,), {"size": self.canvas.size}))
 
-        # 5. Visuals (Grid & Text)
-        self._create_grid()
-        self._create_labels()
+    def _init_labels(self):
+        self.lbl_names = []
+        self.lbl_qual = []
+        self.lbl_ticks = []  # List of tuples (top, zero, bottom)
 
-        # 6. Timer (60Hz refresh)
-        self.timer = app.Timer(1.0 / 60.0, connect=self.on_timer, start=True)
-        self.last_text_update = 0
+        for ch in self.channel_info:
+            # Channel Name (Left)
+            t = TextVisual(
+                ch["name"], color="white", font_size=8, bold=True, anchor_x="right"
+            )
+            self.lbl_names.append(t)
 
-        # 7. Battery State
-        self.bat_level = None
-        self.last_bat_check = 0
+            # Quality (Right)
+            q = TextVisual("", color="green", font_size=7, bold=True, anchor_x="left")
+            self.lbl_qual.append(q)
 
-        if verbose:
-            print(f"Viewer started: {self.total_channels} channels, {self.n_samples} buffer size.")
-
-    def _setup_channels(self):
-        """Define colors, ranges, and active channels."""
-        self.ch_configs = []
-
-        colors = {
-            "EEG": [(0, 0.8, 0.82), (0.25, 0.41, 0.88), (0.12, 0.56, 1.0), (0, 0.75, 1.0)],
-            "ACC": (0.55, 0.71, 0),
-            "GYRO": (0.6, 1.0, 0.6),
-            "OPTICS": [(1, 0.65, 0), (1, 0.39, 0.28), (0.86, 0.08, 0.24), (1, 0.27, 0)],
-        }
-
-        for s_idx, stream in enumerate(self.streams):
-            s_name = stream.name.upper()
-            if "BATTERY" in s_name:
-                continue
-
-            # Determine if stream has valid channels
-            ch_names = stream.info["ch_names"]
-            is_active = [True] * len(ch_names)
-
-            for ch_i, name in enumerate(ch_names):
-                if not is_active[ch_i]:
-                    continue
-
-                ctype = (
-                    "EEG"
-                    if "EEG" in s_name
-                    else ("OPTICS" if "OPTICS" in s_name else "ACC" if "ACC" in name else "GYRO")
+            # Ticks (Right-aligned, left of signal)
+            # Create 3 ticks: Top (+), Zero, Bottom (-)
+            ticks = []
+            for _ in range(3):
+                tick = TextVisual(
+                    "-", color="gray", font_size=6, anchor_x="right", anchor_y="center"
                 )
+                ticks.append(tick)
+            self.lbl_ticks.append(ticks)
 
-                # Color cycling
-                if isinstance(colors.get(ctype), list):
-                    col = colors[ctype][ch_i % len(colors[ctype])]
-                else:
-                    col = colors.get(ctype, (1, 1, 1))
+        # Time Axis
+        self.lbl_time = []
+        for i in range(6):
+            t = TextVisual(
+                f"-{self.window_duration * (1 - i/5):.0f}s",
+                color="gray",
+                font_size=7,
+                anchor_y="top",
+            )
+            self.lbl_time.append(t)
 
-                # Default ranges (can be zoomed later)
-                yrange = 800.0 if ctype == "EEG" else 2.0 if ctype == "ACC" else 490.0 if ctype == "GYRO" else 0.4
-
-                self.ch_configs.append(
-                    {
-                        "stream_idx": s_idx,
-                        "ch_idx": ch_i,
-                        "name": name,
-                        "color": col,
-                        "base_range": yrange,
-                        "scale": 1.0,
-                        "mean": 0.0,
-                        "type": ctype,
-                    }
-                )
-
-    def _init_gloo_data(self):
-        """Upload static attributes to GPU."""
-        # Indices: (channel_id, sample_id)
-        sample_indices = np.tile(np.arange(self.n_samples, dtype=np.float32), self.total_channels)
-        channel_indices = np.repeat(np.arange(self.total_channels, dtype=np.float32), self.n_samples)
-
-        self.program["a_index"] = np.c_[channel_indices, sample_indices]
-
-        # Prepare colors (N_channels x 3) -> repeat for samples
-        raw_colors = np.array([c["color"] for c in self.ch_configs])
-        self.program["a_color"] = np.repeat(raw_colors, self.n_samples, axis=0).astype(np.float32)
-
-        self.program["a_y_scale"] = np.ones(self.n_samples * self.total_channels, dtype=np.float32)
-        self.program["a_y_mean"] = np.zeros(self.n_samples * self.total_channels, dtype=np.float32)
-        self.program["a_y_range"] = np.repeat([c["base_range"] for c in self.ch_configs], self.n_samples).astype(
-            np.float32
+        # Battery Label
+        self.lbl_bat = TextVisual(
+            "BATT: --%", color="yellow", font_size=8, bold=True, anchor_x="right"
         )
 
-        self.program["u_size"] = (self.total_channels, self.n_samples)
-        self.program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
-        self.program["u_offset"] = 0.0
+    def _init_grid_lines(self):
+        # We need two sets of lines:
+        # 1. Separators & Limits (Darker)
+        # 2. Zero Lines (Lighter/Thicker)
 
-        # Index Buffer for line strips
-        indices = []
-        for i in range(self.total_channels):
-            start = i * self.n_samples
-            indices.append(np.arange(start, start + self.n_samples, dtype=np.uint32))
-        self.index_buffer = gloo.IndexBuffer(np.concatenate(indices))
+        limit_pts = []
+        zero_pts = []
 
-        self.program["a_position"] = np.zeros(self.n_samples * self.total_channels, dtype=np.float32)
-
-    def _create_grid(self):
-        """Simple grid lines."""
-        vert = "attribute vec2 p; uniform mat4 m; void main() { gl_Position = m * vec4(p, 0, 1); }"
-        frag = "void main() { gl_FragColor = vec4(0.2, 0.2, 0.2, 1); }"
-        self.grid_prog = gloo.Program(vert, frag)
-        self.grid_prog["m"] = ortho(0, 1, 0, 1, -1, 1)
-
-        lines = []
-        ymargin = 0.03
-        h = (1.0 - ymargin) / self.total_channels
-        x_left, x_right = 0.12, 0.95
+        margin_bottom = 0.05
+        h_plot = 1.0 - margin_bottom
+        margin_left = 0.12
+        margin_right = 0.05
 
         for i in range(self.total_channels):
-            y = ymargin + i * h + h * 0.5
-            lines.extend([[x_left, y], [x_right, y]])
+            # Calculate slot geometry
+            slot_h = h_plot / self.total_channels
+            y_base = margin_bottom + (i * slot_h)
+            y_center = y_base + (slot_h * 0.5)
 
-        self.grid_pos = gloo.VertexBuffer(np.array(lines, dtype=np.float32))
-        self.grid_prog["p"] = self.grid_pos
-        # Store vertex count for draw call
-        self.grid_n_vertices = len(lines)
+            # The signal shader scales data by 0.45.
+            # So the visual "limit" of the data is center +/- (slot_h * 0.45)
+            y_top = y_center + (slot_h * 0.45)
+            y_bot = y_center - (slot_h * 0.45)
 
-    def _create_labels(self):
-        """Create text labels."""
-        self.labels = []
+            # Horizontal Range
+            x1, x2 = margin_left, 1.0 - margin_right
 
-        # Battery Label (Top Right)
-        self.bat_text = TextVisual("BATT: --%", color="gray", font_size=8, anchor_x="right", bold=True)
-        self.labels.append(self.bat_text)
+            # Zero Line
+            zero_pts.extend([[x1, y_center], [x2, y_center]])
 
-        for cfg in self.ch_configs:
-            # Channel Name
-            t = TextVisual(cfg["name"], color="white", font_size=7, anchor_x="right", bold=True)
-            self.labels.append(t)
-            cfg["label_visual"] = t  # Store ref for positioning
+            # Limit Lines
+            limit_pts.extend([[x1, y_top], [x2, y_top]])
+            limit_pts.extend([[x1, y_bot], [x2, y_bot]])
 
-            # Impedance/Stats Label (only for EEG)
-            if cfg["type"] == "EEG":
-                s = TextVisual("σ: --", color="yellow", font_size=6, anchor_x="left")
-                self.labels.append(s)
-                cfg["stat_label"] = s
-
-        # Trigger initial layout
-        self._update_text_positions(self.canvas.size)
-
-    def _update_text_positions(self, size):
-        """Update text positions based on current window size."""
-        width, height = size
-        ymargin = 0.03
-        h = (1.0 - ymargin) / self.total_channels
-
-        # Battery
-        self.bat_text.pos = (width * 0.98, 30)
-
-        for i, cfg in enumerate(self.ch_configs):
-            y_rel = ymargin + i * h + h * 0.5
-            y_px = height * (1.0 - y_rel)
-
-            if "label_visual" in cfg:
-                cfg["label_visual"].pos = (width * 0.11, y_px)
-
-            if "stat_label" in cfg:
-                cfg["stat_label"].pos = (width * 0.96, y_px)
+        self.grid_limit_vbo = gloo.VertexBuffer(np.array(limit_pts, dtype=np.float32))
+        self.grid_zero_vbo = gloo.VertexBuffer(np.array(zero_pts, dtype=np.float32))
 
     def on_timer(self, event):
-        """Update loop."""
-        max_new_samples = 0
-        has_new_data = False
+        # 1. Battery Update
+        if self.battery_stream_idx is not None:
+            try:
+                # Poll battery rarely (every 1s roughly)
+                if self.write_ptr % 50 == 0:
+                    bat_data, _ = self.streams[self.battery_stream_idx].get_data(
+                        winsize=1.0
+                    )
+                    if bat_data.size > 0:
+                        self.battery_level = float(bat_data[0, -1])
+            except:
+                pass
+
+        # 2. Signal Update (Master Clock Logic)
+        master_stream = self.streams[self.master_stream_idx]
+        try:
+            chunk_m, ts_m = master_stream.get_data(winsize=0.5)
+        except:
+            return
+
+        if len(ts_m) == 0:
+            return
+
+        last_t = self.last_timestamps[self.master_stream_idx]
+        new_mask = ts_m > last_t
+        if not np.any(new_mask):
+            return
+
+        data_new_m = chunk_m[:, new_mask]
+        ts_new_m = ts_m[new_mask]
+        self.last_timestamps[self.master_stream_idx] = ts_new_m[-1]
+
+        n_slots_to_fill = data_new_m.shape[1]
+        batch_update = np.zeros(
+            (n_slots_to_fill, self.total_channels), dtype=np.float32
+        )
 
         for s_idx, stream in enumerate(self.streams):
-            if "BATTERY" in stream.name:
+            if s_idx == self.battery_stream_idx:
                 continue
 
-            try:
-                # Fetch data - winsize must be small for low latency
-                # We use a small window (0.2s) just to grab recent packets
-                chunk, ts = stream.get_data(winsize=0.2)
-            except Exception:
-                # Stream might be temporarily unavailable
-                continue
-
-            if chunk is None or chunk.size == 0:
-                continue
-
-            # Filter new samples
-            last_t = self.last_timestamps[s_idx]
-
-            # Simple check: are timestamps newer?
-            if ts[-1] <= last_t:
-                continue
-
-            # Find indices where ts > last_t
-            new_mask = ts > last_t
-            new_data = chunk[:, new_mask]
-
-            # Update last timestamp
-            self.last_timestamps[s_idx] = ts[-1]
-
-            n_new = new_data.shape[1]
-            if n_new == 0:
-                continue
-
-            has_new_data = True
-            if n_new > max_new_samples:
-                max_new_samples = n_new
-
-            # Optimized CPU Ring Buffer Write
-            # Instead of iterating configs, we iterate the map for this specific stream
-            mappings = self.stream_map[s_idx]
-
-            # Vectorized write if possible, or simple loop
-            # Writing channel-by-channel is safer for memory layout
-            for col_idx, s_ch_idx in mappings:
-                # col_idx: index in ring_buffer columns
-                # s_ch_idx: index in the incoming stream chunk rows
-
-                # Handle ring buffer wrapping
-                idxs = (self.write_ptr + np.arange(n_new)) % self.n_samples
-                self.ring_buffer[idxs, col_idx] = new_data[s_ch_idx, :]
-
-        if has_new_data:
-            self.write_ptr = (self.write_ptr + max_new_samples) % self.n_samples
-
-            # Update GPU
-            self.program["a_position"].set_data(self.ring_buffer.T.ravel())
-            self.program["u_offset"] = float(self.write_ptr)
-
-            # Update Stats (throttled to 2Hz)
-            if time.time() - self.last_text_update > 0.5:
-                self._update_stats()
-                self._check_battery()
-                self.canvas.update()
+            if s_idx == self.master_stream_idx:
+                raw_data = data_new_m.T
             else:
-                self.canvas.update()
+                try:
+                    chunk_s, ts_s = stream.get_data(winsize=0.5)
+                except:
+                    continue
 
-    def _check_battery(self):
-        if not self.bat_stream:
-            return
-        try:
-            data, _ = self.bat_stream.get_data(winsize=2.0)
-            if data is not None and data.size > 0:
-                lvl = data[0, -1]
-                self.bat_text.text = f"BATT: {lvl:.0f}%"
-                if lvl > 50:
-                    self.bat_text.color = "lime"
-                elif lvl > 20:
-                    self.bat_text.color = "yellow"
+                if len(ts_s) == 0:
+                    raw_data = np.zeros((n_slots_to_fill, chunk_s.shape[0]))
                 else:
-                    self.bat_text.color = "red"
-        except Exception:
-            pass
+                    last_t_s = self.last_timestamps[s_idx]
+                    mask_s = ts_s > last_t_s
+                    if np.any(mask_s):
+                        d_s = chunk_s[:, mask_s]
+                        self.last_timestamps[s_idx] = ts_s[mask_s][-1]
+                        # Interpolate
+                        x_old = np.linspace(0, 1, d_s.shape[1])
+                        x_new = np.linspace(0, 1, n_slots_to_fill)
+                        raw_data = np.zeros((n_slots_to_fill, d_s.shape[0]))
+                        for i in range(d_s.shape[0]):
+                            raw_data[:, i] = np.interp(x_new, x_old, d_s[i, :])
+                    else:
+                        raw_data = np.zeros((n_slots_to_fill, chunk_s.shape[0]))
 
-    def _update_stats(self):
-        self.last_text_update = time.time()
-        means = np.mean(self.ring_buffer, axis=0)
+            # Process Channels
+            relevant_chs = [c for c in self.channel_info if c["stream_idx"] == s_idx]
+            for ch_info in relevant_chs:
+                signal = raw_data[:, ch_info["ch_idx"]]
 
-        for i, cfg in enumerate(self.ch_configs):
-            cfg["mean"] = means[i]
-            if "stat_label" in cfg:
-                # Calculate std deviation of the specific channel buffer column
-                # Use a subset of buffer to speed up? No, numpy is fast enough for 10s buffer
-                std = np.std(self.ring_buffer[:, i])
-                cfg["stat_label"].text = f"σ: {std:.1f}"
-                cfg["stat_label"].color = "lime" if std < 50 else "yellow" if std < 100 else "red"
+                # DC Offset Removal (EMA)
+                alpha = 0.005
+                for val in signal:
+                    ch_info["dc_offset"] = (1.0 - alpha) * ch_info[
+                        "dc_offset"
+                    ] + alpha * val
 
-        self.program["a_y_mean"] = np.repeat(means, self.n_samples).astype(np.float32)
-        scales = [c["scale"] for c in self.ch_configs]
-        self.program["a_y_scale"] = np.repeat(scales, self.n_samples).astype(np.float32)
+                centered = signal - ch_info["dc_offset"]
+
+                # Quality
+                if ch_info["is_eeg"]:
+                    ch_info["quality_buf"].extend(centered)
+                    if len(ch_info["quality_buf"]) > 256:
+                        ch_info["quality_buf"] = ch_info["quality_buf"][-256:]
+
+                # Normalize to range
+                normalized = 2.0 * (centered / ch_info["range"])
+                batch_update[:, ch_info["data_idx"]] = normalized
+
+        # 3. Write to Buffer
+        idx_start = self.write_ptr
+        idx_end = self.write_ptr + n_slots_to_fill
+
+        if idx_end <= self.n_samples:
+            self.data_buffer[idx_start:idx_end, :] = batch_update
+        else:
+            part1 = self.n_samples - idx_start
+            part2 = n_slots_to_fill - part1
+            self.data_buffer[idx_start:, :] = batch_update[:part1]
+            self.data_buffer[:part2, :] = batch_update[part1:]
+
+        self.write_ptr = (self.write_ptr + n_slots_to_fill) % self.n_samples
+        self.vbo_pos.set_data(self.data_buffer.T.ravel().astype(np.float32))
+        self.program["u_offset"] = float(self.write_ptr)
+
+        self._update_ui_labels()
+        self.canvas.update()
+
+    def _update_ui_labels(self):
+        # Update text visuals every ~10 frames to save CPU
+        if self.write_ptr % 10 != 0:
+            return
+
+        w, h = self.canvas.size
+        margin_bottom = 0.05
+        h_plot = 1.0 - margin_bottom
+
+        # Update Battery Label Text
+        if self.battery_level is not None:
+            self.lbl_bat.text = f"BATT: {self.battery_level:.0f}%"
+            if self.battery_level > 50:
+                self.lbl_bat.color = "lime"
+            elif self.battery_level > 20:
+                self.lbl_bat.color = "yellow"
+            else:
+                self.lbl_bat.color = "red"
+
+        for ch in self.channel_info:
+            # Channel slot geometry in pixels
+            y_rel_bot = margin_bottom + (ch["data_idx"] / self.total_channels) * h_plot
+            slot_h_rel = h_plot / self.total_channels
+            y_rel_center = y_rel_bot + slot_h_rel * 0.5
+            y_rel_top = y_rel_bot + slot_h_rel  # Top of slot
+
+            # Convert to Vispy coordinates (origin top-left)
+            y_px_center = h * (1.0 - y_rel_center)
+
+            # Name
+            self.lbl_names[ch["data_idx"]].pos = (w * 0.11, y_px_center)
+
+            # Quality
+            lbl_q = self.lbl_qual[ch["data_idx"]]
+            lbl_q.pos = (w * 0.96, y_px_center)
+            if ch["is_eeg"] and len(ch["quality_buf"]) > 50:
+                imp = np.std(ch["quality_buf"])
+                lbl_q.text = f"σ:{imp:.0f}"
+                lbl_q.color = (
+                    (0, 1, 0, 1)
+                    if imp < 50
+                    else (1, 1, 0, 1) if imp < 100 else (1, 0, 0, 1)
+                )
+            else:
+                lbl_q.text = ""
+
+            # Ticks (Top, Zero, Bottom)
+            # Ticks are relative to the signal display scaling (0.45)
+            # The signal range (ch['range']) spans from -1.0 to 1.0 in shader space,
+            # which maps to center +/- 0.45 * slot_height visually.
+
+            # Values
+            val_top = ch["range"] / 2.0
+            val_bot = -ch["range"] / 2.0
+
+            # Positions
+            y_px_top = h * (1.0 - (y_rel_center + (slot_h_rel * 0.45)))
+            y_px_bot = h * (1.0 - (y_rel_center - (slot_h_rel * 0.45)))
+
+            # Set Text & Pos
+            ticks = self.lbl_ticks[ch["data_idx"]]
+
+            # Top Tick
+            ticks[0].text = f"{val_top:.0f}" if abs(val_top) >= 10 else f"{val_top:.1f}"
+            ticks[0].pos = (w * 0.115, y_px_top)
+
+            # Zero Tick
+            ticks[1].text = "0"
+            ticks[1].pos = (w * 0.115, y_px_center)
+
+            # Bottom Tick
+            ticks[2].text = f"{val_bot:.0f}" if abs(val_bot) >= 10 else f"{val_bot:.1f}"
+            ticks[2].pos = (w * 0.115, y_px_bot)
 
     def on_draw(self, event):
         gloo.clear(color=(0.1, 0.1, 0.1, 1.0))
-        # Draw grid (explicit mode)
-        self.grid_prog.draw("lines")
-        # Draw signals
-        self.program.draw("line_strip", self.index_buffer)
-        # Draw text
-        for t in self.labels:
+
+        # 1. Grid
+        # Limit lines (Dark Gray)
+        self.prog_grid["color"] = (0.25, 0.25, 0.25, 1.0)
+        self.prog_grid["pos"] = self.grid_limit_vbo
+        self.prog_grid.draw("lines")
+
+        # Zero lines (Lighter Gray)
+        self.prog_grid["color"] = (0.35, 0.35, 0.35, 1.0)
+        self.prog_grid["pos"] = self.grid_zero_vbo
+        self.prog_grid.draw("lines")
+
+        # 2. Signals
+        self.program.draw("line_strip")
+
+        # 3. Text Labels
+        for t in self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]:
             t.draw()
+        for group in self.lbl_ticks:
+            for t in group:
+                t.draw()
+
+        # 4. Battery Bar
+        if self.battery_level is not None:
+            # Draw Background
+            self.bat_prog_bg["u_color"] = (0.3, 0.3, 0.3, 1.0)
+            self.bat_prog_bg.draw("triangle_strip")
+
+            # Draw Fill
+            col = (0.0, 0.8, 0.0, 1.0)
+            if self.battery_level < 50:
+                col = (0.9, 0.9, 0.2, 1.0)
+            if self.battery_level < 20:
+                col = (0.9, 0.2, 0.2, 1.0)
+            self.bat_prog_fill["u_color"] = col
+            self.bat_prog_fill.draw("triangle_strip")
 
     def on_resize(self, event):
-        gloo.set_viewport(0, 0, *event.size)
-        self.program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
-        self.grid_prog["m"] = ortho(0, 1, 0, 1, -1, 1)
-        self._update_text_positions(event.size)
+        w, h = event.size
+        gloo.set_viewport(0, 0, w, h)
+
+        # Update text transforms
+        all_labels = self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]
+        for group in self.lbl_ticks:
+            all_labels.extend(group)
+
+        for t in all_labels:
+            t.transforms.configure(canvas=self.canvas, viewport=(0, 0, w, h))
+
+        # Update Battery Bar VBOs (Top Right)
+        bar_w = 40
+        bar_h = 20
+        pad_x = 20
+        pad_y = 20
+
+        x_start = w - bar_w - pad_x
+        y_start = pad_y
+
+        # Vertices (x, y) - Vispy ortho 0,0 is Bottom-Left, but we usually think Top-Left
+        # Ortho is set to (0, w, 0, h). So y=h is top.
+        y_gl = h - y_start
+
+        bg_verts = np.array(
+            [
+                [x_start, y_gl],
+                [x_start + bar_w, y_gl],
+                [x_start, y_gl - bar_h],
+                [x_start + bar_w, y_gl - bar_h],
+            ],
+            dtype=np.float32,
+        )
+
+        self._bat_bg_vbo.set_data(bg_verts)
+        self.bat_prog_bg["u_projection"] = ortho(0, w, 0, h, -1, 1)
+
+        # Fill calculation
+        fill_pct = max(0.0, min(1.0, (self.battery_level or 0) / 100.0))
+        fill_w = max(0.0, (bar_w - 4) * fill_pct)  # 2px border
+
+        fill_verts = np.array(
+            [
+                [x_start + 2, y_gl - 2],
+                [x_start + 2 + fill_w, y_gl - 2],
+                [x_start + 2, y_gl - bar_h + 2],
+                [x_start + 2 + fill_w, y_gl - bar_h + 2],
+            ],
+            dtype=np.float32,
+        )
+
+        self._bat_fill_vbo.set_data(fill_verts)
+        self.bat_prog_fill["u_projection"] = ortho(0, w, 0, h, -1, 1)
+
+        # Position Battery Text
+        self.lbl_bat.pos = (x_start - 10, h - y_start - (bar_h / 2))
+
+        # Position Time Axis
+        for i, t in enumerate(self.lbl_time):
+            x = w * (0.12 + (i / 5) * (0.83))
+            t.pos = (x, h - 5)
 
     def on_mouse_wheel(self, event):
+        # Zoom logic (Amplitude)
         delta = event.delta[1] if hasattr(event.delta, "__getitem__") else event.delta
-        scale_mult = 1.1 if delta > 0 else 0.9
-        for c in self.ch_configs:
-            c["scale"] = max(0.1, c["scale"] * scale_mult)
-        self.last_text_update = 0  # Force update
+        scale = 1.1 if delta > 0 else 0.9
 
-    def show(self):
-        self.canvas.show()
-        app.run()
+        # Find channel under mouse
+        y_mouse = event.pos[1]
+        h = self.canvas.size[1]
+        y_norm = 1.0 - (y_mouse / h)
+
+        # Approx hit test
+        margin = 0.05
+        h_usable = 1.0 - margin
+        ch_idx = int(((y_norm - margin) / h_usable) * self.total_channels)
+
+        if 0 <= ch_idx < self.total_channels:
+            target = self.channel_info[ch_idx]
+            # Identify Group
+            grp = (
+                "EEG"
+                if target["is_eeg"]
+                else (
+                    "ACC"
+                    if "ACC" in target["name"]
+                    else "GYRO" if "GYRO" in target["name"] else "OPT"
+                )
+            )
+
+            # Apply zoom to all in group
+            for ch in self.channel_info:
+                curr_grp = (
+                    "EEG"
+                    if ch["is_eeg"]
+                    else (
+                        "ACC"
+                        if "ACC" in ch["name"]
+                        else "GYRO" if "GYRO" in ch["name"] else "OPT"
+                    )
+                )
+
+                if curr_grp == grp:
+                    ch["range"] /= scale
 
 
-def view(stream_name: Optional[str] = None, window_duration: float = 5.0, verbose: bool = True):
-    """
-    Connect to available Muse LSL streams and launch the viewer.
-    """
-    configure_lsl_api_cfg()
+def view(stream_name=None, window_duration=10.0, **kwargs):
+    from mne_lsl.stream import StreamLSL
+
+    print("Connecting to Streams...")
     streams = []
 
-    # Potential stream names from stream.py
-    targets = [stream_name] if stream_name else ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS", "Muse_BATTERY"]
+    # Auto-detect including battery
+    targets = ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS", "Muse_BATTERY"]
+    if stream_name:
+        targets = [stream_name]
 
-    print("Looking for LSL streams...")
-    for n in targets:
+    for name in targets:
         try:
-            # mne_lsl StreamLSL automatically tries to resolve the stream
-            s = StreamLSL(bufsize=window_duration, name=n)
-            s.connect(timeout=1.5)  # Try to connect
+            bufsize = window_duration if "BATTERY" not in name else 5.0
+            s = StreamLSL(bufsize=bufsize, name=name)
+            s.connect(timeout=1.5)
             streams.append(s)
-            if verbose:
-                print(f"Connected to {n}")
-        except Exception:
-            if verbose:
-                print(f"Could not find stream: {n}")
+            print(f"  + Connected: {name}")
+        except:
             pass
 
     if not streams:
-        print("No streams found. Ensure stream.py is running.")
+        print("Error: No streams found. Is 'openmuse-stream' running?")
         return
 
-    v = FastViewer(streams, window_duration, verbose)
-    v.show()
+    v = RealtimeViewer(streams, window_duration=window_duration, **kwargs)
+    app.run()
