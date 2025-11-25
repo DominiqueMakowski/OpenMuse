@@ -4,11 +4,13 @@ Optimized with Ring Buffers and GPU-side normalization.
 """
 
 import time
+
 import numpy as np
+from mne_lsl.stream import StreamLSL
 from vispy import app, gloo
 from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
-from mne_lsl.stream import StreamLSL
+
 from .utils import configure_lsl_api_cfg
 
 # --- Shaders ----------------------------------------------------------------
@@ -34,7 +36,7 @@ void main() {
     // Calculate relative index so the newest sample (at u_offset) is at x=1.0
     float sample_idx = a_index.y;
     float relative_idx = mod(sample_idx - u_offset + u_size.y, u_size.y);
-    
+
     // X Layout: 12% left margin, 5% right margin
     float x_margin_left = 0.12;
     float x_margin_right = 0.05;
@@ -46,7 +48,7 @@ void main() {
     float y_bottom_margin = 0.03;
     float y_height = (1.0 - y_bottom_margin) / u_size.x;
     float y_center = y_bottom_margin + (ch_idx * y_height) + (y_height * 0.5);
-    
+
     // Normalize raw data to [-1, 1] based on range/mean, then scale to channel slot
     float norm_val = 2.0 * (a_position - a_y_mean) / a_y_range;
     float y = y_center + (norm_val * y_height * 0.35 * a_y_scale);
@@ -64,9 +66,9 @@ void main() { gl_FragColor = v_color; }
 
 
 class FastViewer:
-    def __init__(self, streams, window_size=10.0, verbose=True):
+    def __init__(self, streams, window_duration=10.0, verbose=True):
         self.streams = streams
-        self.window_size = window_size
+        self.window_duration = window_duration
         self.verbose = verbose
         self.running = True
 
@@ -78,14 +80,12 @@ class FastViewer:
 
         # 2. Buffers
         max_sfreq = max(s.info["sfreq"] for s in streams)
-        self.n_samples = int(max_sfreq * window_size)
+        self.n_samples = int(max_sfreq * window_duration)
         self.total_channels = len(self.ch_configs)
 
         # The Main Ring Buffer: (n_samples, n_channels)
         # We write to this on CPU, then upload changed parts to GPU
-        self.ring_buffer = np.zeros(
-            (self.n_samples, self.total_channels), dtype=np.float32
-        )
+        self.ring_buffer = np.zeros((self.n_samples, self.total_channels), dtype=np.float32)
         self.write_ptr = 0
         self.last_timestamps = [0.0] * len(streams)  # Track last seen TS per stream
 
@@ -116,9 +116,7 @@ class FastViewer:
         self.last_bat_check = 0
 
         if verbose:
-            print(
-                f"Viewer started: {self.total_channels} channels, {self.n_samples} buffer size."
-            )
+            print(f"Viewer started: {self.total_channels} channels, {self.n_samples} buffer size.")
 
     def _setup_channels(self):
         """Define colors, ranges, and active channels."""
@@ -157,22 +155,14 @@ class FastViewer:
                 ctype = (
                     "EEG"
                     if "EEG" in s_name
-                    else (
-                        "OPTICS"
-                        if "OPTICS" in s_name
-                        else "ACC" if "ACC" in name else "GYRO"
-                    )
+                    else ("OPTICS" if "OPTICS" in s_name else "ACC" if "ACC" in name else "GYRO")
                 )
                 if ctype in ["EEG", "OPTICS"]:
                     col = colors[ctype][ch_i % len(colors[ctype])]
                 else:
                     col = colors[ctype]
 
-                yrange = (
-                    1000.0
-                    if ctype == "EEG"
-                    else 2.0 if ctype == "ACC" else 490.0 if ctype == "GYRO" else 0.4
-                )
+                yrange = 1000.0 if ctype == "EEG" else 2.0 if ctype == "ACC" else 490.0 if ctype == "GYRO" else 0.4
 
                 self.ch_configs.append(
                     {
@@ -191,28 +181,16 @@ class FastViewer:
         """Upload static attributes to GPU."""
         # Indices: (channel_id, sample_id)
         # sample_id 0..N repeats for every channel
-        sample_indices = np.tile(
-            np.arange(self.n_samples, dtype=np.float32), self.total_channels
-        )
-        channel_indices = np.repeat(
-            np.arange(self.total_channels, dtype=np.float32), self.n_samples
-        )
+        sample_indices = np.tile(np.arange(self.n_samples, dtype=np.float32), self.total_channels)
+        channel_indices = np.repeat(np.arange(self.total_channels, dtype=np.float32), self.n_samples)
 
         self.program["a_index"] = np.c_[channel_indices, sample_indices]
-        self.program["a_color"] = np.repeat(
-            [c["color"] for c in self.ch_configs], self.n_samples, axis=0
-        )
+        self.program["a_color"] = np.repeat([c["color"] for c in self.ch_configs], self.n_samples, axis=0)
 
         # Initial variable attributes
-        self.program["a_y_scale"] = np.ones(
-            self.n_samples * self.total_channels, dtype=np.float32
-        )
-        self.program["a_y_mean"] = np.zeros(
-            self.n_samples * self.total_channels, dtype=np.float32
-        )
-        self.program["a_y_range"] = np.repeat(
-            [c["base_range"] for c in self.ch_configs], self.n_samples
-        )
+        self.program["a_y_scale"] = np.ones(self.n_samples * self.total_channels, dtype=np.float32)
+        self.program["a_y_mean"] = np.zeros(self.n_samples * self.total_channels, dtype=np.float32)
+        self.program["a_y_range"] = np.repeat([c["base_range"] for c in self.ch_configs], self.n_samples)
 
         # Uniforms
         self.program["u_size"] = (self.total_channels, self.n_samples)
@@ -228,9 +206,7 @@ class FastViewer:
         self.index_buffer = gloo.IndexBuffer(np.concatenate(indices))
 
         # Position buffer (starts empty)
-        self.program["a_position"] = np.zeros(
-            self.n_samples * self.total_channels, dtype=np.float32
-        )
+        self.program["a_position"] = np.zeros(self.n_samples * self.total_channels, dtype=np.float32)
 
     def _create_grid(self):
         """Simple grid lines."""
@@ -257,18 +233,14 @@ class FastViewer:
         h = (1.0 - ymargin) / self.total_channels
 
         # Add Battery Label (Top Right)
-        self.bat_text = TextVisual(
-            "BATT: --%", color="gray", font_size=8, anchor_x="right", bold=True
-        )
+        self.bat_text = TextVisual("BATT: --%", color="gray", font_size=8, anchor_x="right", bold=True)
         self.bat_text.pos = (1400 * 0.98, 30)  # Top right corner
         self.labels.append(self.bat_text)
 
         for i, cfg in enumerate(self.ch_configs):
             y = ymargin + i * h + h * 0.5
             # Channel Name
-            t = TextVisual(
-                cfg["name"], color="white", font_size=7, anchor_x="right", bold=True
-            )
+            t = TextVisual(cfg["name"], color="white", font_size=7, anchor_x="right", bold=True)
             t.pos = (
                 1400 * 0.11,
                 900 * (1 - y),
@@ -324,9 +296,7 @@ class FastViewer:
                 for cfg in self.ch_configs:
                     if cfg["stream_idx"] == s_idx:
                         # Write raw value to CPU ring buffer
-                        self.ring_buffer[write_idx, self.ch_configs.index(cfg)] = (
-                            new_data[cfg["ch_idx"], i]
-                        )
+                        self.ring_buffer[write_idx, self.ch_configs.index(cfg)] = new_data[cfg["ch_idx"], i]
 
         if has_updates:
             # Advance pointer
@@ -434,17 +404,15 @@ class FastViewer:
         app.run()
 
 
-def view(stream_name=None, window_size=5.0, verbose=True):
+def view(stream_name=None, window_duration=5.0, verbose=True):
     configure_lsl_api_cfg()
     streams = []
 
     # Auto-connect logic
-    names = (
-        [stream_name] if stream_name else ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS"]
-    )
+    names = [stream_name] if stream_name else ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS"]
     for n in names:
         try:
-            s = StreamLSL(bufsize=window_size, name=n)
+            s = StreamLSL(bufsize=window_duration, name=n)
             s.connect(timeout=1.0)
             streams.append(s)
         except:
@@ -454,5 +422,5 @@ def view(stream_name=None, window_size=5.0, verbose=True):
         print("No streams found.")
         return
 
-    v = FastViewer(streams, window_size, verbose)
+    v = FastViewer(streams, window_duration, verbose)
     v.show()

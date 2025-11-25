@@ -30,12 +30,8 @@ def main(argv=None):
     p_find.set_defaults(func=handle_find)
 
     # record subcommand
-    p_rec = subparsers.add_parser(
-        "record", help="Connect and record raw packets to a text file"
-    )
-    p_rec.add_argument(
-        "--address", required=True, help="Device address (e.g., MAC on Windows)"
-    )
+    p_rec = subparsers.add_parser("record", help="Connect and record raw packets to a text file")
+    p_rec.add_argument("--address", required=True, help="Device address (e.g., MAC on Windows)")
     p_rec.add_argument(
         "--duration",
         "-d",
@@ -43,12 +39,8 @@ def main(argv=None):
         default=30.0,
         help="Recording duration in seconds (default: 30)",
     )
-    p_rec.add_argument(
-        "--outfile", "-o", default="muse_record.txt", help="Output text file path"
-    )
-    p_rec.add_argument(
-        "--preset", default="p1041", help="Preset to send (by default, p1041)"
-    )
+    p_rec.add_argument("--outfile", "-o", default="muse_record.txt", help="Output text file path")
+    p_rec.add_argument("--preset", default="p1041", help="Preset to send (by default, p1041)")
 
     def handle_record(ns):
         if ns.duration <= 0:
@@ -133,13 +125,6 @@ def main(argv=None):
         default=10.0,
         help="Time window to display in seconds (default: 10.0)",
     )
-    p_view.add_argument(
-        "--duration",
-        "-d",
-        type=float,
-        default=None,
-        help="Optional viewing duration in seconds. Omit to view until window closed.",
-    )
 
     def handle_view(ns):
         from .view import view
@@ -152,7 +137,7 @@ def main(argv=None):
         view(
             stream_name=ns.stream_name,
             duration=ns.duration,
-            window_size=ns.window,
+            window_duration=ns.window,
             verbose=True,
         )
         return 0
@@ -162,9 +147,7 @@ def main(argv=None):
     # ===============================================
     # BITalino subcommands
     # ===============================================
-    p_find_bitalino = subparsers.add_parser(
-        "find_bitalino", help="Scan for BITalino devices"
-    )
+    p_find_bitalino = subparsers.add_parser("find_bitalino", help="Scan for BITalino devices")
     _add_find_args(p_find_bitalino)
 
     def handle_find_bitalino(ns):
@@ -176,12 +159,8 @@ def main(argv=None):
     p_find_bitalino.set_defaults(func=handle_find_bitalino)
 
     # stream_bitalino subcommand
-    p_stream_bitalino = subparsers.add_parser(
-        "stream_bitalino", help="Stream data from BITalino to LSL"
-    )
-    p_stream_bitalino.add_argument(
-        "--address", required=True, help="Device address (e.g., MAC on Windows)"
-    )
+    p_stream_bitalino = subparsers.add_parser("stream_bitalino", help="Stream data from BITalino to LSL")
+    p_stream_bitalino.add_argument("--address", required=True, help="Device address (e.g., MAC on Windows)")
     p_stream_bitalino.add_argument(
         "--channels",
         nargs=6,
@@ -193,15 +172,14 @@ def main(argv=None):
 
     def handle_stream_bitalino(ns):
         import asyncio
+
         from .bitalino import stream_bitalino
 
         # Prepare channels list: Convert CLI strings "None"/"0" to Python None
         # If --channels is not provided, we pass None (driver defaults to all RAW)
         channels_arg = None
         if ns.channels:
-            channels_arg = [
-                None if c.lower() in ("none", "0", "null") else c for c in ns.channels
-            ]
+            channels_arg = [None if c.lower() in ("none", "0", "null") else c for c in ns.channels]
 
         asyncio.run(
             stream_bitalino(
@@ -240,7 +218,7 @@ def main(argv=None):
             parser.error("--window must be positive")
         view_bitalino(
             stream_name=ns.stream_name,
-            window_size=ns.window,
+            window_duration=ns.window,
         )
         return 0
 
