@@ -3,6 +3,7 @@ High-performance Real-time LSL Viewer using VisPy + GLOO.
 Optimized with Ring Buffers and GPU-side normalization.
 """
 
+import os
 import time
 
 import numpy as np
@@ -12,6 +13,9 @@ from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
 
 from .utils import configure_lsl_api_cfg
+
+# Enable high-DPI scaling
+os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
 # --- Shaders ----------------------------------------------------------------
 # Moves math to GPU: Normalization and Ring-Buffer scrolling logic happens here.
@@ -185,12 +189,16 @@ class FastViewer:
         channel_indices = np.repeat(np.arange(self.total_channels, dtype=np.float32), self.n_samples)
 
         self.program["a_index"] = np.c_[channel_indices, sample_indices]
-        self.program["a_color"] = np.repeat([c["color"] for c in self.ch_configs], self.n_samples, axis=0)
+        self.program["a_color"] = np.repeat([c["color"] for c in self.ch_configs], self.n_samples, axis=0).astype(
+            np.float32
+        )
 
         # Initial variable attributes
         self.program["a_y_scale"] = np.ones(self.n_samples * self.total_channels, dtype=np.float32)
         self.program["a_y_mean"] = np.zeros(self.n_samples * self.total_channels, dtype=np.float32)
-        self.program["a_y_range"] = np.repeat([c["base_range"] for c in self.ch_configs], self.n_samples)
+        self.program["a_y_range"] = np.repeat([c["base_range"] for c in self.ch_configs], self.n_samples).astype(
+            np.float32
+        )
 
         # Uniforms
         self.program["u_size"] = (self.total_channels, self.n_samples)
@@ -366,11 +374,11 @@ class FastViewer:
                 lbl.color = "lime" if std < 50 else "yellow" if std < 100 else "red"
 
         # Upload means to GPU
-        self.program["a_y_mean"] = np.repeat(means, self.n_samples)
+        self.program["a_y_mean"] = np.repeat(means, self.n_samples).astype(np.float32)
 
         # Update scales (in case zoom changed)
         scales = [c["scale"] for c in self.ch_configs]
-        self.program["a_y_scale"] = np.repeat(scales, self.n_samples)
+        self.program["a_y_scale"] = np.repeat(scales, self.n_samples).astype(np.float32)
 
     def on_draw(self, event):
         gloo.clear(color=(0.1, 0.1, 0.1, 1.0))
