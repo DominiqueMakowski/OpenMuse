@@ -157,79 +157,135 @@ FLUSH_INTERVAL = 0.2  # 200ms jitter buffer
 
 class StableClock:
     """
-    A physics-constrained RLS filter for clock synchronization.
+    A physics-constrained clock synchronizer for BLE devices with accurate internal clocks.
 
-    Unlike a standard linear regression, this filter has a strong prior belief
-    that the clock drift (slope) is 1.0. This prevents 'buffer bloat' or
-    latency spikes from being misinterpreted as clock skew.
+    The Muse device uses a 256 kHz crystal oscillator which is highly stable. The main
+    challenge is Bluetooth buffer bloat (asymmetric latency spikes) which can cause
+    packets to arrive late. Standard regression misinterprets this as clock drift.
+
+    This implementation uses a slope-constrained approach:
+    - The slope (clock speed ratio) is heavily constrained near 1.0
+    - The intercept (offset) adapts freely to track the minimum latency envelope
+    - Late packets (buffer bloat) are effectively filtered out
 
     Model:
         lsl_time = intercept + (slope * device_time)
 
-    State:
-        theta = [slope, intercept]
-        P     = Covariance matrix
+    Design Rationale:
+        - Slope is constrained because the device crystal is physically stable
+        - Intercept tracks the offset, adapting to clock offset changes
+        - We use minimum latency tracking to avoid buffer bloat corruption
     """
 
-    def __init__(self, forgetting_factor: float = 0.9995):
-        self.lam = forgetting_factor
-        self.dim = 2
+    def __init__(
+        self,
+        forgetting_factor: float = 0.9995,
+        slope_variance: float = 1e-6,
+        intercept_variance: float = 100.0,
+    ):
+        """
+        Initialize the StableClock.
 
-        # Initialize State: Slope=1.0, Intercept=0.0
+        Parameters
+        ----------
+        forgetting_factor : float
+            RLS forgetting factor. Values close to 1.0 give slower adaptation.
+            Default 0.9995 corresponds to ~2000 sample effective window.
+        slope_variance : float
+            Initial variance for slope estimate. Very low (1e-6) to strongly
+            constrain slope near 1.0. The slope represents clock speed ratio
+            which should be extremely stable for crystal oscillators.
+        intercept_variance : float
+            Initial variance for intercept estimate. Higher values allow faster
+            adaptation to the true offset.
+        """
+        self.lam = forgetting_factor
+
+        # State vector: [slope, intercept]
+        # Initialize slope=1.0 (clocks run at same rate), intercept=0.0 (unknown offset)
         self.theta = np.array([1.0, 0.0])
 
-        # Initialize Covariance:
-        # P[0,0] (Slope Variance): Set low (0.01).
-        #   -> We are quite sure the Muse clock is running at real-time speed.
-        # P[1,1] (Intercept Variance): Set high (1000).
-        #   -> We have no idea what the initial offset is.
-        self.P = np.zeros((2, 2))
-        self.P[0, 0] = 0.01
-        self.P[1, 1] = 1000.0
+        # Covariance matrix - diagonal initialization
+        # Low slope variance = strong prior that slope ≈ 1.0
+        # Higher intercept variance = adapt quickly to true offset
+        self.P = np.diag([slope_variance, intercept_variance])
 
         self.initialized = False
-        self.first_device_time = 0.0
+
+        # For minimum latency envelope tracking
+        self._min_offset_history = []
+        self._history_window = 100  # samples to consider for min envelope
 
     def update(self, device_time: float, lsl_now: float):
         """
         Update the clock model with a new measurement pair.
+
+        Parameters
+        ----------
+        device_time : float
+            Timestamp from the device's internal clock.
+        lsl_now : float
+            LSL local_clock() time when the packet arrived.
         """
-        # On first packet, just snap the intercept to the current offset
+        # Calculate current offset (positive = packet arrived "late" relative to model)
+        current_offset = lsl_now - device_time
+
         if not self.initialized:
-            self.first_device_time = device_time
-            self.theta[1] = lsl_now - device_time
+            # First packet: initialize intercept to current offset
+            self.theta[1] = current_offset
             self.initialized = True
+            self._min_offset_history.append(current_offset)
             return
 
-        # RLS Update (Joseph form for stability)
-        # Input vector x = [device_time, 1.0]
+        # Track minimum offset envelope (to detect buffer bloat)
+        self._min_offset_history.append(current_offset)
+        if len(self._min_offset_history) > self._history_window:
+            self._min_offset_history.pop(0)
+
+        min_recent_offset = min(self._min_offset_history)
+
+        # Only update if this packet is near the minimum latency envelope
+        # Packets with latency > 20ms above minimum are likely buffer-bloated
+        latency_threshold = 0.020  # 20ms
+        if current_offset > min_recent_offset + latency_threshold:
+            # Skip this packet for model update (likely buffer bloat)
+            return
+
+        # --- RLS Update ---
         x = np.array([device_time, 1.0]).reshape(-1, 1)
 
-        # Prediction
+        # Prediction error
         y_pred = float(x.T @ self.theta)
         error = lsl_now - y_pred
 
-        # Gain Calculation
+        # Kalman-style gain
         Px = self.P @ x
-        den = float(self.lam + (x.T @ Px))
-        k = Px / den
+        denominator = float(self.lam + x.T @ Px)
+        if denominator < 1e-10:
+            return  # Numerical safety
+        k = Px / denominator
 
-        # State Update
+        # Update state
         self.theta = self.theta + (k * error).flatten()
 
-        # Covariance Update
-        I = np.eye(self.dim)
-        KX = k @ x.T
-        self.P = (I - KX) @ self.P @ (I - KX).T + (k @ k.T) * 1e-12
-        self.P /= self.lam
+        # Update covariance (standard RLS form)
+        I = np.eye(2)
+        self.P = (I - k @ x.T) @ self.P / self.lam
 
-        # Safety Clamp: Ensure slope stays physically realistic (0.9 < slope < 1.1)
+        # Enforce symmetry (numerical stability)
+        self.P = (self.P + self.P.T) / 2
+
+        # Clamp slope to physically realistic bounds (±10% of nominal)
+        # Crystal oscillators are far more stable than this, but we allow margin
         self.theta[0] = np.clip(self.theta[0], 0.9, 1.1)
+
+        # Prevent covariance collapse (maintain minimum adaptation ability)
+        self.P[0, 0] = max(self.P[0, 0], 1e-8)
+        self.P[1, 1] = max(self.P[1, 1], 1e-4)
 
     def map_time(self, device_times: np.ndarray) -> np.ndarray:
         """Transform device timestamps to LSL time using current model."""
         if not self.initialized:
-            # Fallback if called before update
             return device_times
 
         slope, intercept = self.theta
@@ -331,8 +387,7 @@ class SensorStream:
     sample_counter: int = 0
 
     # --- Stable Clock Sync ---
-    clock: WindowedClock = field(default_factory=WindowedClock)
-    # clock: StableClock = field(default_factory=StableClock)
+    clock: StableClock = field(default_factory=StableClock)
     last_update_device_time: float = -1.0
 
 
