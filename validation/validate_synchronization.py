@@ -1,3 +1,8 @@
+"""
+I have recorded streams from the Muse headband, as well as from another device (OpenSignals). I recorded them using the latest version of LabRecorder, and try to open them using pyxdf (https://github.com/xdf-modules/pyxdf/blob/main/src/pyxdf/pyxdf.py).
+The test was designed to measure the synchrony between the OpenSignals device, which contains a photosensor, and the Muse headband, via its Optics channels. We attached the Photosensor, and the Muse optics sensor to the screen, and flashed the screen between white and black. The experiment was also sending a digital trigger, JsPsychMarker, on screen change. The goal is to see whether the event (white -> black screen) onsets are aligned between the two streams.
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -5,12 +10,8 @@ import pyxdf
 import scipy.signal
 
 
-# I have recorded streams from the Muse headband, as well as from another device (OpenSignals). I recorded them using the latest version of LabRecorder, and try to open them using pyxdf (https://github.com/xdf-modules/pyxdf/blob/main/src/pyxdf/pyxdf.py).
-# The test was designed to measure the synchrony between the OpenSignals device, which contains a photosensor, and the Muse headband, via its Optics channels. We attached the Photosensor, and the Muse optics sensor to the screen, and flashed the screen between white and black. The goal is to see whether the event (white -> black screen) onsets are aligned between the two streams.
-
-
 # --- Configuration ---
-filename = "./validate_synchronization2.xdf"
+filename = "./validate_synchronization3.xdf"
 dejitter_timestamps = ["OpenSignals"]
 # select_streams = [
 #     {"name": "Muse_ACCGYRO"},
@@ -18,6 +19,8 @@ dejitter_timestamps = ["OpenSignals"]
 #     {"name": "Muse_EEG"},
 #     {"name": "OpenSignals"},
 # ]
+
+
 
 # --- Load Data ---
 streams, header = pyxdf.load_xdf(
@@ -68,7 +71,7 @@ for i, stream in enumerate(streams):
 
 
 # --- Plot streams ---
-xmin = tmin + 60
+xmin = tmin + 4
 fig = plt.figure(figsize=(15, 7))
 for i, s in enumerate(streams):
     name = s["info"].get("name", ["Unnamed"])[0]
@@ -85,14 +88,34 @@ for i, s in enumerate(streams):
         optics_ts = s["time_stamps"]
         mask = (optics_ts >= xmin) & (optics_ts <= xmin + 5)
         plt.plot(optics_ts[mask], optics[mask], color="red", label="OPTICS")
+    if name in ["jsPsychMarkers"]:
+        markers = np.array(s["time_series"]).astype("int").flatten()
+        markers_ts = s["time_stamps"]
+        mask = (markers_ts >= xmin) & (markers_ts <= xmin + 5)
+        plt.bar(
+            markers_ts[mask],
+            markers[mask],
+            width=0.02,
+            color="darkgreen",
+            alpha=0.9,
+            label="jsPsychMarkers - 1",
+        )
+        plt.bar(
+            markers_ts[mask],
+            np.abs(markers[mask] - 1),
+            width=0.02,
+            color="green",
+            alpha=0.6,
+            label="jsPsychMarkers - 0",
+        )
 plt.legend()
 plt.tight_layout()
 plt.show()
 
 
-events_lux = nk.events_find(lux, threshold=0.2, threshold_keep="below", duration_min=5)
+events_lux = nk.events_find(lux, threshold=0.8, threshold_keep="below", duration_min=5)
 events_optics = nk.events_find(
-    optics, threshold=0.2, threshold_keep="above", duration_min=5
+    optics, threshold=0.5, threshold_keep="above", duration_min=5
 )
 print(
     f"N events LUX: {len(events_lux['onset'])}, N events OPTICS: {len(events_optics['onset'])}"
@@ -100,15 +123,43 @@ print(
 onsets_lux = lux_ts[events_lux["onset"]]
 onsets_optics = optics_ts[events_optics["onset"]]
 onsets_optics = nk.find_closest(onsets_lux, onsets_optics)
-diff = onsets_lux - onsets_optics
-np.median(diff)
+onsets_markers = markers_ts[markers == 1]
+onsets_markers = nk.find_closest(onsets_lux, onsets_markers)
+
+# Make differences
+diff_luxoptics = onsets_lux - onsets_optics
+mask_luxoptics = np.abs(diff_luxoptics) < 0.8
+np.median(diff_luxoptics)
+
+diff_luxmarkers = onsets_lux - onsets_markers
+mask_luxmarkers = np.abs(diff_luxmarkers) < 0.8
+np.median(diff_luxmarkers)
+
+diff_opticsmarkers = onsets_optics - onsets_markers
+mask_opticsmarkers = np.abs(diff_opticsmarkers) < 2
+np.median(diff_opticsmarkers)
 
 
-# plt.plot((onsets_lux - min(onsets_lux)) / 60, diff)
-plt.plot(onsets_lux, diff)
+# plt.plot((onsets_lux - min(onsets_lux)) / 60, diff_luxoptics)
+plt.plot(
+    (onsets_lux[mask_luxoptics] - min(onsets_lux)) / 60,
+    diff_luxoptics[mask_luxoptics],
+    label="LUX - OPTICS",
+)
+plt.plot(
+    (onsets_lux[mask_luxmarkers] - min(onsets_lux)) / 60,
+    diff_luxmarkers[mask_luxmarkers],
+    label="LUX - MARKERS",
+)
+plt.plot(
+    (onsets_optics[mask_opticsmarkers] - min(onsets_optics)) / 60,
+    diff_opticsmarkers[mask_opticsmarkers],
+    label="OPTICS - MARKERS",
+)
 plt.title("LUX - OPTICS event onsets differences")
 plt.xlabel("Time")
-plt.ylabel("Difference (s) (LUX - OPTICS events onsets)")
+plt.ylabel("Difference (s)")
+plt.legend()
 
 # _ = plt.hist(diff, alpha=0.5, bins=200)
 
