@@ -119,8 +119,8 @@ def main(argv=None):
         help="Name of specific LSL stream to visualize (default: None = show all available streams: Muse_EEG + Muse_ACCGYRO)",
     )
     p_view.add_argument(
-        "--window",
-        "-w",
+        "--duration",
+        "-d",
         type=float,
         default=10.0,
         help="Time window to display in seconds (default: 10.0)",
@@ -129,15 +129,12 @@ def main(argv=None):
     def handle_view(ns):
         from .view import view
 
-        if ns.window <= 0:
-            parser.error("--window must be positive")
         if ns.duration is not None and ns.duration <= 0:
             parser.error("--duration must be positive when provided")
 
         view(
             stream_name=ns.stream_name,
-            duration=ns.duration,
-            window_duration=ns.window,
+            window_duration=ns.duration,
             verbose=True,
         )
         return 0
