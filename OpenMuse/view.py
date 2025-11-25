@@ -6,7 +6,7 @@ Optimized with Ring Buffers and GPU-side normalization.
 import os
 import time
 import warnings
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 from mne_lsl.stream import StreamLSL
@@ -83,7 +83,6 @@ class FastViewer:
         self._setup_channels()
 
         # 2. Buffers
-        # Handle case where streams might be empty or disconnected
         if not self.streams:
             raise RuntimeError("No LSL streams available to view.")
 
@@ -95,6 +94,14 @@ class FastViewer:
         self.ring_buffer = np.zeros((self.n_samples, self.total_channels), dtype=np.float32)
         self.write_ptr = 0
         self.last_timestamps = [0.0] * len(streams)
+
+        # Optimization: Pre-map stream index to list of (buffer_col_idx, stream_channel_idx)
+        # This removes the O(N^2) loop in on_timer
+        self.stream_map: Dict[int, List[tuple]] = {i: [] for i in range(len(streams))}
+        for col_idx, cfg in enumerate(self.ch_configs):
+            s_idx = cfg["stream_idx"]
+            s_ch_idx = cfg["ch_idx"]
+            self.stream_map[s_idx].append((col_idx, s_ch_idx))
 
         # 3. VisPy Canvas
         self.canvas = app.Canvas(
@@ -150,7 +157,8 @@ class FastViewer:
                     continue
 
                 ctype = (
-                    "EEG" if "EEG" in s_name
+                    "EEG"
+                    if "EEG" in s_name
                     else ("OPTICS" if "OPTICS" in s_name else "ACC" if "ACC" in name else "GYRO")
                 )
 
@@ -161,18 +169,20 @@ class FastViewer:
                     col = colors.get(ctype, (1, 1, 1))
 
                 # Default ranges (can be zoomed later)
-                yrange = 1000.0 if ctype == "EEG" else 2.0 if ctype == "ACC" else 490.0 if ctype == "GYRO" else 0.4
+                yrange = 800.0 if ctype == "EEG" else 2.0 if ctype == "ACC" else 490.0 if ctype == "GYRO" else 0.4
 
-                self.ch_configs.append({
-                    "stream_idx": s_idx,
-                    "ch_idx": ch_i,
-                    "name": name,
-                    "color": col,
-                    "base_range": yrange,
-                    "scale": 1.0,
-                    "mean": 0.0,
-                    "type": ctype,
-                })
+                self.ch_configs.append(
+                    {
+                        "stream_idx": s_idx,
+                        "ch_idx": ch_i,
+                        "name": name,
+                        "color": col,
+                        "base_range": yrange,
+                        "scale": 1.0,
+                        "mean": 0.0,
+                        "type": ctype,
+                    }
+                )
 
     def _init_gloo_data(self):
         """Upload static attributes to GPU."""
@@ -188,7 +198,9 @@ class FastViewer:
 
         self.program["a_y_scale"] = np.ones(self.n_samples * self.total_channels, dtype=np.float32)
         self.program["a_y_mean"] = np.zeros(self.n_samples * self.total_channels, dtype=np.float32)
-        self.program["a_y_range"] = np.repeat([c["base_range"] for c in self.ch_configs], self.n_samples).astype(np.float32)
+        self.program["a_y_range"] = np.repeat([c["base_range"] for c in self.ch_configs], self.n_samples).astype(
+            np.float32
+        )
 
         self.program["u_size"] = (self.total_channels, self.n_samples)
         self.program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
@@ -236,7 +248,7 @@ class FastViewer:
             # Channel Name
             t = TextVisual(cfg["name"], color="white", font_size=7, anchor_x="right", bold=True)
             self.labels.append(t)
-            cfg["label_visual"] = t # Store ref for positioning
+            cfg["label_visual"] = t  # Store ref for positioning
 
             # Impedance/Stats Label (only for EEG)
             if cfg["type"] == "EEG":
@@ -257,15 +269,7 @@ class FastViewer:
         self.bat_text.pos = (width * 0.98, 30)
 
         for i, cfg in enumerate(self.ch_configs):
-            # In VisPy TextVisual, Y is usually pixels from top (if origin top-left)
-            # or bottom (if origin bottom-left). Standard Canvas is top-left usually.
-            # Using normalized coords mapped to pixels:
-
             y_rel = ymargin + i * h + h * 0.5
-            # Flip Y because VisPy gloo is bottom-left (0,0), but TextVisual
-            # often behaves differently depending on transforms.
-            # In raw pixel coords, (0,0) is usually top-left.
-            # Let's assume standard pixel coords:
             y_px = height * (1.0 - y_rel)
 
             if "label_visual" in cfg:
@@ -285,8 +289,10 @@ class FastViewer:
 
             try:
                 # Fetch data - winsize must be small for low latency
-                chunk, ts = stream.get_data(winsize=0.1)
+                # We use a small window (0.2s) just to grab recent packets
+                chunk, ts = stream.get_data(winsize=0.2)
             except Exception:
+                # Stream might be temporarily unavailable
                 continue
 
             if chunk is None or chunk.size == 0:
@@ -294,29 +300,39 @@ class FastViewer:
 
             # Filter new samples
             last_t = self.last_timestamps[s_idx]
-            new_mask = ts > last_t
 
-            if not np.any(new_mask):
+            # Simple check: are timestamps newer?
+            if ts[-1] <= last_t:
                 continue
 
+            # Find indices where ts > last_t
+            new_mask = ts > last_t
             new_data = chunk[:, new_mask]
+
+            # Update last timestamp
             self.last_timestamps[s_idx] = ts[-1]
+
             n_new = new_data.shape[1]
+            if n_new == 0:
+                continue
 
             has_new_data = True
             if n_new > max_new_samples:
                 max_new_samples = n_new
 
-            # Write to CPU Ring Buffer
-            for i in range(n_new):
-                write_idx = (self.write_ptr + i) % self.n_samples
+            # Optimized CPU Ring Buffer Write
+            # Instead of iterating configs, we iterate the map for this specific stream
+            mappings = self.stream_map[s_idx]
 
-                # Optimized: Iterate configs belonging to this stream only
-                # (Pre-filtering would be faster but this is acceptable for <100 channels)
-                for ch_c, cfg in enumerate(self.ch_configs):
-                    if cfg["stream_idx"] == s_idx:
-                        val = new_data[cfg["ch_idx"], i]
-                        self.ring_buffer[write_idx, ch_c] = val
+            # Vectorized write if possible, or simple loop
+            # Writing channel-by-channel is safer for memory layout
+            for col_idx, s_ch_idx in mappings:
+                # col_idx: index in ring_buffer columns
+                # s_ch_idx: index in the incoming stream chunk rows
+
+                # Handle ring buffer wrapping
+                idxs = (self.write_ptr + np.arange(n_new)) % self.n_samples
+                self.ring_buffer[idxs, col_idx] = new_data[s_ch_idx, :]
 
         if has_new_data:
             self.write_ptr = (self.write_ptr + max_new_samples) % self.n_samples
@@ -325,7 +341,7 @@ class FastViewer:
             self.program["a_position"].set_data(self.ring_buffer.T.ravel())
             self.program["u_offset"] = float(self.write_ptr)
 
-            # Update Stats (throttled)
+            # Update Stats (throttled to 2Hz)
             if time.time() - self.last_text_update > 0.5:
                 self._update_stats()
                 self._check_battery()
@@ -337,13 +353,16 @@ class FastViewer:
         if not self.bat_stream:
             return
         try:
-            data, _ = self.bat_stream.get_data(winsize=5.0)
+            data, _ = self.bat_stream.get_data(winsize=2.0)
             if data is not None and data.size > 0:
                 lvl = data[0, -1]
                 self.bat_text.text = f"BATT: {lvl:.0f}%"
-                if lvl > 50: self.bat_text.color = "lime"
-                elif lvl > 20: self.bat_text.color = "yellow"
-                else: self.bat_text.color = "red"
+                if lvl > 50:
+                    self.bat_text.color = "lime"
+                elif lvl > 20:
+                    self.bat_text.color = "yellow"
+                else:
+                    self.bat_text.color = "red"
         except Exception:
             pass
 
@@ -355,6 +374,7 @@ class FastViewer:
             cfg["mean"] = means[i]
             if "stat_label" in cfg:
                 # Calculate std deviation of the specific channel buffer column
+                # Use a subset of buffer to speed up? No, numpy is fast enough for 10s buffer
                 std = np.std(self.ring_buffer[:, i])
                 cfg["stat_label"].text = f"σ: {std:.1f}"
                 cfg["stat_label"].color = "lime" if std < 50 else "yellow" if std < 100 else "red"
@@ -384,7 +404,7 @@ class FastViewer:
         scale_mult = 1.1 if delta > 0 else 0.9
         for c in self.ch_configs:
             c["scale"] = max(0.1, c["scale"] * scale_mult)
-        self.last_text_update = 0 # Force update
+        self.last_text_update = 0  # Force update
 
     def show(self):
         self.canvas.show()
@@ -406,7 +426,7 @@ def view(stream_name: Optional[str] = None, window_duration: float = 5.0, verbos
         try:
             # mne_lsl StreamLSL automatically tries to resolve the stream
             s = StreamLSL(bufsize=window_duration, name=n)
-            s.connect(timeout=1.5) # Try to connect
+            s.connect(timeout=1.5)  # Try to connect
             streams.append(s)
             if verbose:
                 print(f"Connected to {n}")
