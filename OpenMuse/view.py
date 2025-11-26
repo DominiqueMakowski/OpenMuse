@@ -6,7 +6,7 @@ Features:
 - Synchronization: Upsamples aux streams to match EEG.
 - Stability: EMA for DC offset removal.
 - Performance: Static Ring Buffer (Low CPU).
-- Visuals: Battery Indicator, Y-Axis Ticks, Detailed Grid, Signal Quality.
+- Visuals: Battery Text (Top Right), Y-Axis Ticks, Detailed Grid, Signal Quality.
 """
 
 import time
@@ -40,7 +40,7 @@ void main() {
     float current_x = mod(sample_idx - u_offset + u_n_samples, u_n_samples);
 
     // Margins
-    float margin_left = 0.12;   // Increased for Y-ticks
+    float margin_left = 0.12;
     float margin_right = 0.05;
     float plot_width = 1.0 - margin_left - margin_right;
 
@@ -66,21 +66,6 @@ FRAG_SHADER = """
 #version 120
 varying vec4 v_color;
 void main() { gl_FragColor = v_color; }
-"""
-
-# --- BATTERY SHADERS ---
-BAT_VERT = """
-attribute vec2 a_position;
-uniform mat4 u_projection;
-void main() {
-    gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
-}
-"""
-BAT_FRAG = """
-uniform vec4 u_color;
-void main() {
-    gl_FragColor = u_color;
-}
 """
 
 
@@ -178,9 +163,11 @@ class RealtimeViewer:
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
         ch_indices = np.repeat(np.arange(self.total_channels), self.n_samples)
         sa_indices = np.tile(np.arange(self.n_samples), self.total_channels)
+
         self.program["a_index"] = np.c_[
             ch_indices, sa_indices, np.zeros_like(ch_indices)
         ].astype(np.float32)
+
         colors_flat = np.array(
             [c["color"] for c in self.channel_info], dtype=np.float32
         )
@@ -196,13 +183,19 @@ class RealtimeViewer:
         self.program["u_offset"] = 0.0
         self.program["u_scale"] = (1.0, 1.0)
 
-        # Battery Programs
-        self.bat_prog_bg = gloo.Program(BAT_VERT, BAT_FRAG)
-        self.bat_prog_fill = gloo.Program(BAT_VERT, BAT_FRAG)
-        self._bat_bg_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
-        self._bat_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
-        self.bat_prog_bg["a_position"] = self._bat_bg_vbo
-        self.bat_prog_fill["a_position"] = self._bat_fill_vbo
+        # we generate indices that define separate lines for every point within a channel, but do NOT bridge the gap between channels.
+        indices = []
+        for i in range(self.total_channels):
+            start = i * self.n_samples
+            # We create segments (0,1), (1,2) ... (N-2, N-1)
+            # We intentionally stop at N-1 and do not connect to N
+            base = np.arange(start, start + self.n_samples - 1, dtype=np.uint32)
+
+            # Interleave to create line pairs: [0, 1, 1, 2, 2, 3...]
+            rows = np.vstack((base, base + 1)).T.flatten()
+            indices.append(rows)
+
+        self.index_buffer = gloo.IndexBuffer(np.concatenate(indices))
 
         # Grid Program
         self.prog_grid = gloo.Program(
@@ -222,7 +215,7 @@ class RealtimeViewer:
 
         # Timer
         self.timer = app.Timer(update_interval, connect=self.on_timer, start=True)
-        # Force initial resize to set battery bar positions
+        # Force initial resize
         self.on_resize(type("Event", (object,), {"size": self.canvas.size}))
 
     def _init_labels(self):
@@ -241,8 +234,7 @@ class RealtimeViewer:
             q = TextVisual("", color="green", font_size=7, bold=True, anchor_x="left")
             self.lbl_qual.append(q)
 
-            # Ticks (Right-aligned, left of signal)
-            # Create 3 ticks: Top (+), Zero, Bottom (-)
+            # Ticks
             ticks = []
             for _ in range(3):
                 tick = TextVisual(
@@ -262,16 +254,17 @@ class RealtimeViewer:
             )
             self.lbl_time.append(t)
 
-        # Battery Label
+        # Battery Label - Anchor top right
         self.lbl_bat = TextVisual(
-            "BATT: --%", color="yellow", font_size=8, bold=True, anchor_x="right"
+            "--%",
+            color="yellow",
+            font_size=10,
+            bold=True,
+            anchor_x="right",
+            anchor_y="top",
         )
 
     def _init_grid_lines(self):
-        # We need two sets of lines:
-        # 1. Separators & Limits (Darker)
-        # 2. Zero Lines (Lighter/Thicker)
-
         limit_pts = []
         zero_pts = []
 
@@ -281,23 +274,16 @@ class RealtimeViewer:
         margin_right = 0.05
 
         for i in range(self.total_channels):
-            # Calculate slot geometry
             slot_h = h_plot / self.total_channels
             y_base = margin_bottom + (i * slot_h)
             y_center = y_base + (slot_h * 0.5)
 
-            # The signal shader scales data by 0.45.
-            # So the visual "limit" of the data is center +/- (slot_h * 0.45)
             y_top = y_center + (slot_h * 0.45)
             y_bot = y_center - (slot_h * 0.45)
 
-            # Horizontal Range
             x1, x2 = margin_left, 1.0 - margin_right
 
-            # Zero Line
             zero_pts.extend([[x1, y_center], [x2, y_center]])
-
-            # Limit Lines
             limit_pts.extend([[x1, y_top], [x2, y_top]])
             limit_pts.extend([[x1, y_bot], [x2, y_bot]])
 
@@ -415,7 +401,6 @@ class RealtimeViewer:
         self.canvas.update()
 
     def _update_ui_labels(self):
-        # Update text visuals every ~10 frames to save CPU
         if self.write_ptr % 10 != 0:
             return
 
@@ -425,7 +410,7 @@ class RealtimeViewer:
 
         # Update Battery Label Text
         if self.battery_level is not None:
-            self.lbl_bat.text = f"BATT: {self.battery_level:.0f}%"
+            self.lbl_bat.text = f"{self.battery_level:.0f}%"
             if self.battery_level > 50:
                 self.lbl_bat.color = "lime"
             elif self.battery_level > 20:
@@ -438,7 +423,6 @@ class RealtimeViewer:
             y_rel_bot = margin_bottom + (ch["data_idx"] / self.total_channels) * h_plot
             slot_h_rel = h_plot / self.total_channels
             y_rel_center = y_rel_bot + slot_h_rel * 0.5
-            y_rel_top = y_rel_bot + slot_h_rel  # Top of slot
 
             # Convert to Vispy coordinates (origin top-left)
             y_px_center = h * (1.0 - y_rel_center)
@@ -460,31 +444,18 @@ class RealtimeViewer:
             else:
                 lbl_q.text = ""
 
-            # Ticks (Top, Zero, Bottom)
-            # Ticks are relative to the signal display scaling (0.45)
-            # The signal range (ch['range']) spans from -1.0 to 1.0 in shader space,
-            # which maps to center +/- 0.45 * slot_height visually.
-
-            # Values
+            # Ticks
             val_top = ch["range"] / 2.0
             val_bot = -ch["range"] / 2.0
 
-            # Positions
             y_px_top = h * (1.0 - (y_rel_center + (slot_h_rel * 0.45)))
             y_px_bot = h * (1.0 - (y_rel_center - (slot_h_rel * 0.45)))
 
-            # Set Text & Pos
             ticks = self.lbl_ticks[ch["data_idx"]]
-
-            # Top Tick
             ticks[0].text = f"{val_top:.0f}" if abs(val_top) >= 10 else f"{val_top:.1f}"
             ticks[0].pos = (w * 0.115, y_px_top)
-
-            # Zero Tick
             ticks[1].text = "0"
             ticks[1].pos = (w * 0.115, y_px_center)
-
-            # Bottom Tick
             ticks[2].text = f"{val_bot:.0f}" if abs(val_bot) >= 10 else f"{val_bot:.1f}"
             ticks[2].pos = (w * 0.115, y_px_bot)
 
@@ -492,18 +463,17 @@ class RealtimeViewer:
         gloo.clear(color=(0.1, 0.1, 0.1, 1.0))
 
         # 1. Grid
-        # Limit lines (Dark Gray)
         self.prog_grid["color"] = (0.25, 0.25, 0.25, 1.0)
         self.prog_grid["pos"] = self.grid_limit_vbo
         self.prog_grid.draw("lines")
 
-        # Zero lines (Lighter Gray)
         self.prog_grid["color"] = (0.35, 0.35, 0.35, 1.0)
         self.prog_grid["pos"] = self.grid_zero_vbo
         self.prog_grid.draw("lines")
 
         # 2. Signals
-        self.program.draw("line_strip")
+        # We use GL_LINES with our custom IndexBuffer to prevent connections between channels
+        self.program.draw("lines", indices=self.index_buffer)
 
         # 3. Text Labels
         for t in self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]:
@@ -511,21 +481,6 @@ class RealtimeViewer:
         for group in self.lbl_ticks:
             for t in group:
                 t.draw()
-
-        # 4. Battery Bar
-        if self.battery_level is not None:
-            # Draw Background
-            self.bat_prog_bg["u_color"] = (0.3, 0.3, 0.3, 1.0)
-            self.bat_prog_bg.draw("triangle_strip")
-
-            # Draw Fill
-            col = (0.0, 0.8, 0.0, 1.0)
-            if self.battery_level < 50:
-                col = (0.9, 0.9, 0.2, 1.0)
-            if self.battery_level < 20:
-                col = (0.9, 0.2, 0.2, 1.0)
-            self.bat_prog_fill["u_color"] = col
-            self.bat_prog_fill.draw("triangle_strip")
 
     def on_resize(self, event):
         w, h = event.size
@@ -539,75 +494,31 @@ class RealtimeViewer:
         for t in all_labels:
             t.transforms.configure(canvas=self.canvas, viewport=(0, 0, w, h))
 
-        # Update Battery Bar VBOs (Top Right)
-        bar_w = 40
-        bar_h = 20
-        pad_x = 20
-        pad_y = 20
-
-        x_start = w - bar_w - pad_x
-        y_start = pad_y
-
-        # Vertices (x, y) - Vispy ortho 0,0 is Bottom-Left, but we usually think Top-Left
-        # Ortho is set to (0, w, 0, h). So y=h is top.
-        y_gl = h - y_start
-
-        bg_verts = np.array(
-            [
-                [x_start, y_gl],
-                [x_start + bar_w, y_gl],
-                [x_start, y_gl - bar_h],
-                [x_start + bar_w, y_gl - bar_h],
-            ],
-            dtype=np.float32,
-        )
-
-        self._bat_bg_vbo.set_data(bg_verts)
-        self.bat_prog_bg["u_projection"] = ortho(0, w, 0, h, -1, 1)
-
-        # Fill calculation
-        fill_pct = max(0.0, min(1.0, (self.battery_level or 0) / 100.0))
-        fill_w = max(0.0, (bar_w - 4) * fill_pct)  # 2px border
-
-        fill_verts = np.array(
-            [
-                [x_start + 2, y_gl - 2],
-                [x_start + 2 + fill_w, y_gl - 2],
-                [x_start + 2, y_gl - bar_h + 2],
-                [x_start + 2 + fill_w, y_gl - bar_h + 2],
-            ],
-            dtype=np.float32,
-        )
-
-        self._bat_fill_vbo.set_data(fill_verts)
-        self.bat_prog_fill["u_projection"] = ortho(0, w, 0, h, -1, 1)
-
-        # Position Battery Text
-        self.lbl_bat.pos = (x_start - 10, h - y_start - (bar_h / 2))
-
         # Position Time Axis
         for i, t in enumerate(self.lbl_time):
             x = w * (0.12 + (i / 5) * (0.83))
             t.pos = (x, h - 5)
 
+        # Position Battery Text (Top Right)
+        # Margin from edges
+        margin_x = 20
+        margin_y = 20
+        self.lbl_bat.pos = (w - margin_x, margin_y)
+
     def on_mouse_wheel(self, event):
-        # Zoom logic (Amplitude)
         delta = event.delta[1] if hasattr(event.delta, "__getitem__") else event.delta
         scale = 1.1 if delta > 0 else 0.9
 
-        # Find channel under mouse
         y_mouse = event.pos[1]
         h = self.canvas.size[1]
         y_norm = 1.0 - (y_mouse / h)
 
-        # Approx hit test
         margin = 0.05
         h_usable = 1.0 - margin
         ch_idx = int(((y_norm - margin) / h_usable) * self.total_channels)
 
         if 0 <= ch_idx < self.total_channels:
             target = self.channel_info[ch_idx]
-            # Identify Group
             grp = (
                 "EEG"
                 if target["is_eeg"]
@@ -618,7 +529,6 @@ class RealtimeViewer:
                 )
             )
 
-            # Apply zoom to all in group
             for ch in self.channel_info:
                 curr_grp = (
                     "EEG"
@@ -633,7 +543,6 @@ class RealtimeViewer:
                 if curr_grp == grp:
                     ch["range"] /= scale
 
-    # --- ADDED THIS METHOD TO MATCH OLD STRUCTURE ---
     def show(self):
         """Show the canvas and start the event loop."""
         self.canvas.show()
@@ -645,9 +554,6 @@ class RealtimeViewer:
                 stream.disconnect()
             if self.verbose:
                 print("Viewer closed.")
-
-        # In view_old.py, app.run() is called in the view() function,
-        # so we just show the canvas here.
 
 
 def view(stream_name=None, window_duration=10.0, **kwargs):
@@ -678,7 +584,7 @@ def view(stream_name=None, window_duration=10.0, **kwargs):
 
     # Instantiate viewer
     v = RealtimeViewer(streams, window_duration=window_duration, **kwargs)
-    v.show()  # Explicit show() before run()
+    v.show()
 
     try:
         app.run()
