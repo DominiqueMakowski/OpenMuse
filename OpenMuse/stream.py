@@ -299,7 +299,6 @@ class WindowedClock:
         self.history = deque()  # Stores (device_time, lsl_time)
 
         # Current model state [slope, intercept]
-        # Default to slope=1.0, intercept=0.0 until initialized
         self.slope = 1.0
         self.intercept = 0.0
         self.initialized = False
@@ -315,16 +314,19 @@ class WindowedClock:
         self.history.append((device_time, lsl_now))
 
         # 2. Prune old history (keep only window_len seconds)
-        # We assume monotonic time; prune from left
         limit = device_time - self.window_len
         while self.history and self.history[0][0] < limit:
             self.history.popleft()
 
         # 3. Fit model (only periodically to save CPU)
-        if not self.initialized or (lsl_now - self.last_fit_time) > self.fit_interval:
+        # We also force a check if we aren't initialized yet but have enough data
+        if (lsl_now - self.last_fit_time) > self.fit_interval or (not self.initialized and len(self.history) >= 10):
             self._fit()
             self.last_fit_time = lsl_now
-            self.initialized = True
+
+            # Only mark as initialized if we actually have enough data
+            if len(self.history) >= 10:
+                self.initialized = True
 
     def _fit(self):
         """Perform linear regression on the history buffer."""
@@ -337,20 +339,16 @@ class WindowedClock:
         x = data[:, 0]  # Device Time
         y = data[:, 1]  # LSL Time
 
-        # Robustness: We ideally want to fit to the 'fastest' packets (lowest latency)
-        # But a simple linear fit on the mean could be sufficient.
-        # We center x to improve numerical stability of polyfit
         x_mean = np.mean(x)
         y_mean = np.mean(y)
 
         # Fit line: y = mx + c
-        # Slope m = sum((x - x_mean)(y - y_mean)) / sum((x - x_mean)^2)
         x_centered = x - x_mean
         y_centered = y - y_mean
 
         denom = np.sum(x_centered**2)
         if denom < 1e-9:
-            return  # Avoid division by zero if all timestamps are identical
+            return
 
         self.slope = np.sum(x_centered * y_centered) / denom
         self.intercept = y_mean - (self.slope * x_mean)
@@ -359,10 +357,14 @@ class WindowedClock:
         """Transform device timestamps to LSL time using current model."""
         if not self.initialized:
             # Fallback for first few packets: just offset by current diff
+            # This ensures we don't send 0.0 to LSL while waiting for history to fill
             if len(self.history) > 0:
                 dt, lt = self.history[-1]
                 return device_times + (lt - dt)
-            return device_times
+
+            # Emergency fallback if history is empty (rare, but prevents 0.0 crash)
+            from mne_lsl.lsl import local_clock
+            return device_times + (local_clock() - device_times[-1] if device_times.size > 0 else 0)
 
         return self.intercept + (self.slope * device_times)
 
