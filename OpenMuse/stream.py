@@ -141,9 +141,14 @@ import numpy as np
 from bleak.exc import BleakError
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
-from .decode import (ACCGYRO_CHANNELS, BATTERY_CHANNELS, make_timestamps,
-                     parse_message, select_eeg_channels,
-                     select_optics_channels)
+from .decode import (
+    ACCGYRO_CHANNELS,
+    BATTERY_CHANNELS,
+    make_timestamps,
+    parse_message,
+    select_eeg_channels,
+    select_optics_channels,
+)
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
@@ -175,9 +180,9 @@ class StableClock:
 
     def __init__(
         self,
-        forgetting_factor: float = 0.9995,
-        slope_variance: float = 1e-6,
-        intercept_variance: float = 100.0,
+        forgetting_factor: float = 0.998,
+        slope_variance: float = 1e-87,
+        intercept_variance: float = 1.0,
     ):
         """
         Initialize the StableClock.
@@ -186,14 +191,14 @@ class StableClock:
         ----------
         forgetting_factor : float
             RLS forgetting factor. Values close to 1.0 give slower adaptation.
-            Default 0.9995 corresponds to ~2000 sample effective window.
+            Default 0.998 corresponds to ~500 sample effective window.
         slope_variance : float
-            Initial variance for slope estimate. Very low (1e-6) to strongly
+            Initial variance for slope estimate. Very low to strongly
             constrain slope near 1.0. The slope represents clock speed ratio
             which should be extremely stable for crystal oscillators.
         intercept_variance : float
-            Initial variance for intercept estimate. Higher values allow faster
-            adaptation to the true offset.
+            Initial variance for intercept estimate. Moderate value (1.0) allows
+            reasonably fast adaptation without overshooting.
         """
         self.lam = forgetting_factor
 
@@ -203,14 +208,14 @@ class StableClock:
 
         # Covariance matrix - diagonal initialization
         # Low slope variance = strong prior that slope ≈ 1.0
-        # Higher intercept variance = adapt quickly to true offset
+        # Moderate intercept variance = balanced adaptation speed
         self.P = np.diag([slope_variance, intercept_variance])
 
         self.initialized = False
 
-        # For minimum latency envelope tracking
-        self._min_offset_history = []
-        self._history_window = 100  # samples to consider for min envelope
+        # For minimum latency envelope tracking (use percentile instead of min)
+        self._offset_history: deque = deque(maxlen=200)
+        self._percentile = 5.0  # Use 5th percentile instead of absolute minimum
 
     def update(self, device_time: float, lsl_now: float):
         """
@@ -230,20 +235,24 @@ class StableClock:
             # First packet: initialize intercept to current offset
             self.theta[1] = current_offset
             self.initialized = True
-            self._min_offset_history.append(current_offset)
+            self._offset_history.append(current_offset)
             return
 
-        # Track minimum offset envelope (to detect buffer bloat)
-        self._min_offset_history.append(current_offset)
-        if len(self._min_offset_history) > self._history_window:
-            self._min_offset_history.pop(0)
+        # Track offset history for robust envelope estimation
+        self._offset_history.append(current_offset)
 
-        min_recent_offset = min(self._min_offset_history)
+        # Use percentile instead of minimum (more robust to single outliers)
+        if len(self._offset_history) >= 10:
+            baseline_offset = np.percentile(
+                list(self._offset_history), self._percentile
+            )
+        else:
+            baseline_offset = min(self._offset_history)
 
-        # Only update if this packet is near the minimum latency envelope
-        # Packets with latency > 20ms above minimum are likely buffer-bloated
-        latency_threshold = 0.020  # 20ms
-        if current_offset > min_recent_offset + latency_threshold:
+        # Only update if this packet is near the low-latency envelope
+        # Wider threshold (50ms) early on, tighter (20ms) once we have history
+        latency_threshold = 0.050 if len(self._offset_history) < 50 else 0.025
+        if current_offset > baseline_offset + latency_threshold:
             # Skip this packet for model update (likely buffer bloat)
             return
 
@@ -320,7 +329,9 @@ class WindowedClock:
 
         # 3. Fit model (only periodically to save CPU)
         # We also force a check if we aren't initialized yet but have enough data
-        if (lsl_now - self.last_fit_time) > self.fit_interval or (not self.initialized and len(self.history) >= 10):
+        if (lsl_now - self.last_fit_time) > self.fit_interval or (
+            not self.initialized and len(self.history) >= 10
+        ):
             self._fit()
             self.last_fit_time = lsl_now
 
@@ -364,7 +375,10 @@ class WindowedClock:
 
             # Emergency fallback if history is empty (rare, but prevents 0.0 crash)
             from mne_lsl.lsl import local_clock
-            return device_times + (local_clock() - device_times[-1] if device_times.size > 0 else 0)
+
+            return device_times + (
+                local_clock() - device_times[-1] if device_times.size > 0 else 0
+            )
 
         return self.intercept + (self.slope * device_times)
 
@@ -450,6 +464,113 @@ class RLSClock:
         return intercept + (slope * device_times)
 
 
+class RobustClock:
+    """
+    Key design principles:
+    1. **Fixed slope = 1.0**: Crystal oscillators are extremely stable. Any apparent
+        drift is due to buffer bloat, not actual clock skew. We ONLY track offset.
+
+    2. **Robust offset estimation**: Use a weighted median approach on recent samples
+       to reject outliers (buffer-bloated packets) without the instability of
+       minimum-envelope tracking.
+
+    3. **Windowed history**: Maintain a sliding window of offset measurements,
+       giving more weight to recent samples while being robust to outliers.
+    """
+
+    def __init__(
+        self,
+        window_seconds: float = 10.0,
+        percentile: float = 10.0,
+        ema_alpha: float = 0.02,
+    ):
+        """
+        Initialize the RobustClock.
+
+        Parameters
+        ----------
+        window_seconds : float
+            Time window for offset history (in seconds). Longer = more stable,
+            shorter = faster adaptation. Default 10s balances both.
+        percentile : float
+            Percentile of offset distribution to use (0-50). Lower values track
+            the minimum latency envelope more aggressively. Default 10 provides
+            robustness while still favoring low-latency packets.
+        ema_alpha : float
+            Exponential moving average smoothing factor for the final offset.
+            Lower = smoother but slower to adapt. Default 0.02 gives ~50 sample
+            smoothing at 256 Hz.
+        """
+        self.window_seconds = window_seconds
+        self.percentile = percentile
+        self.ema_alpha = ema_alpha
+
+        # Offset history: list of (device_time, offset) tuples
+        self._history: deque = deque()
+
+        # Current smoothed offset estimate
+        self._offset = 0.0
+        self._offset_initialized = False
+
+        self.initialized = False
+
+    def update(self, device_time: float, lsl_now: float):
+        """
+        Update the clock model with a new measurement pair.
+
+        Parameters
+        ----------
+        device_time : float
+            Timestamp from the device's internal clock.
+        lsl_now : float
+            LSL local_clock() time when the packet arrived.
+        """
+        # Calculate instantaneous offset
+        current_offset = lsl_now - device_time
+
+        if not self.initialized:
+            # First packet: initialize with current offset
+            self._offset = current_offset
+            self._offset_initialized = True
+            self.initialized = True
+            self._history.append((device_time, current_offset))
+            return
+
+        # Add to history
+        self._history.append((device_time, current_offset))
+
+        # Prune old history (keep only window_seconds worth)
+        cutoff_time = device_time - self.window_seconds
+        while self._history and self._history[0][0] < cutoff_time:
+            self._history.popleft()
+
+        # Compute robust offset estimate using low percentile
+        # This naturally rejects buffer-bloated packets (high offset = late arrival)
+        if len(self._history) >= 5:
+            offsets = np.array([o for _, o in self._history])
+            # Use low percentile to track minimum latency envelope
+            # But not minimum (which is too noisy) - percentile is more stable
+            robust_offset = np.percentile(offsets, self.percentile)
+
+            # Smooth with EMA to avoid sudden jumps
+            self._offset = (
+                self.ema_alpha * robust_offset + (1 - self.ema_alpha) * self._offset
+            )
+        else:
+            # Not enough history yet - use simple EMA on raw offset
+            self._offset = (
+                self.ema_alpha * current_offset + (1 - self.ema_alpha) * self._offset
+            )
+
+    def map_time(self, device_times: np.ndarray) -> np.ndarray:
+        """Transform device timestamps to LSL time using current offset."""
+        if not self.initialized:
+            return device_times
+
+        # Simple offset model: lsl_time = device_time + offset
+        return device_times + self._offset
+
+
 @dataclass
 class SensorStream:
     """Holds the LSL outlet and a buffer for a single sensor stream."""
@@ -463,9 +584,10 @@ class SensorStream:
     last_abs_tick: int = 0
     sample_counter: int = 0
 
-    # --- Stable Clock Sync ---
+    # --- Robust Clock Sync ---
+    clock: RobustClock = field(default_factory=RobustClock)
     # clock: StableClock = field(default_factory=StableClock)
-    clock: WindowedClock = field(default_factory=WindowedClock)
+    # clock: WindowedClock = field(default_factory=WindowedClock)
     last_update_device_time: float = -1.0
 
 
