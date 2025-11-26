@@ -131,23 +131,19 @@ in the same format as the 'record' command:
 import asyncio
 import time
 import warnings
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union, TextIO
-from collections import deque
+from typing import Dict, List, Optional, TextIO, Tuple, Union
+
 import bleak
-from bleak.exc import BleakError
 import numpy as np
+from bleak.exc import BleakError
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
-from .decode import (
-    ACCGYRO_CHANNELS,
-    BATTERY_CHANNELS,
-    make_timestamps,
-    parse_message,
-    select_eeg_channels,
-    select_optics_channels,
-)
+from .decode import (ACCGYRO_CHANNELS, BATTERY_CHANNELS, make_timestamps,
+                     parse_message, select_eeg_channels,
+                     select_optics_channels)
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
@@ -294,8 +290,6 @@ class StableClock:
 
 class WindowedClock:
     """
-    A robust clock synchronizer using a sliding window.
-
     It fits a linear regression (Time_LSL = slope * Time_Device + intercept)
     over a history window (e.g., 30 seconds).
     """
@@ -344,7 +338,7 @@ class WindowedClock:
         y = data[:, 1]  # LSL Time
 
         # Robustness: We ideally want to fit to the 'fastest' packets (lowest latency)
-        # But a simple linear fit on the mean is usually sufficient for Muse.
+        # But a simple linear fit on the mean could be sufficient.
         # We center x to improve numerical stability of polyfit
         x_mean = np.mean(x)
         y_mean = np.mean(y)
@@ -373,6 +367,87 @@ class WindowedClock:
         return self.intercept + (self.slope * device_times)
 
 
+class RLSClock:
+    """
+    A clock synchronizer that uses a standard Recursive Least Squares (RLS) filter to fit:
+        lsl_time = intercept + (slope * device_time)
+
+    Unlike StableClock (which constrains the slope near 1.0), this model allows
+    the slope to drift more freely but resets if it diverges significantly.
+    """
+
+    def __init__(
+        self,
+        forgetting_factor: float = 0.9999,
+        initial_covariance: float = 1e6,
+    ):
+        self.lam = forgetting_factor
+        self.P_init = initial_covariance
+
+        # State: [slope, intercept]
+        self.theta = np.array([1.0, 0.0])
+        self.P = np.eye(2) * self.P_init
+
+        self.initialized = False
+        self.last_update_device_time = -1.0
+
+    def reset(self, current_offset: float = 0.0):
+        """Reset filter state to defaults."""
+        self.theta = np.array([1.0, current_offset])
+        self.P = np.eye(2) * self.P_init
+        self.initialized = True
+
+    def update(self, device_time: float, lsl_now: float):
+        """
+        Update the model using standard RLS as found in stream_old.py.
+        """
+        # Initialize on first packet
+        if not self.initialized:
+            self.reset(current_offset=lsl_now - device_time)
+            self.last_update_device_time = device_time
+            return
+
+        # Prepare RLS input vector x = [device_time, 1.0]
+        x = np.array([device_time, 1.0]).reshape(-1, 1)
+
+        # --- RLS Update (Joseph form for numerical stability) ---
+        # 1. Calculate Gain
+        Px = self.P @ x
+        denominator = float(self.lam + x.T @ Px)
+        k = Px / denominator
+
+        # 2. Prediction Error
+        y_pred = float(x.T @ self.theta)
+        error = lsl_now - y_pred
+
+        # 3. Update Parameters (theta)
+        self.theta = self.theta + (k * error).flatten()
+
+        # 4. Update Covariance (P)
+        I = np.eye(2)
+        KX = k @ x.T
+        self.P = (I - KX) @ self.P @ (I - KX).T + (k @ k.T) * 1e-12
+        self.P /= self.lam
+
+        # --- Stability Check (from stream_old.py) ---
+        # If slope (theta[0]) diverges too far from 1.0, reset the filter.
+        slope = self.theta[0]
+        if not (0.5 < slope < 1.5):
+            # Calculate simple offset for the reset
+            current_offset = lsl_now - device_time
+            self.reset(current_offset)
+
+        self.last_update_device_time = device_time
+
+    def map_time(self, device_times: np.ndarray) -> np.ndarray:
+        """Transform device timestamps to LSL time."""
+        if not self.initialized:
+            return device_times
+
+        slope, intercept = self.theta
+        return intercept + (slope * device_times)
+
+
 @dataclass
 class SensorStream:
     """Holds the LSL outlet and a buffer for a single sensor stream."""
@@ -387,7 +462,8 @@ class SensorStream:
     sample_counter: int = 0
 
     # --- Stable Clock Sync ---
-    clock: StableClock = field(default_factory=StableClock)
+    # clock: StableClock = field(default_factory=StableClock)
+    clock: WindowedClock = field(default_factory=WindowedClock)
     last_update_device_time: float = -1.0
 
 
