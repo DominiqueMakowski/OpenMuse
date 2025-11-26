@@ -19,44 +19,44 @@ from .utils import configure_lsl_api_cfg
 # --- SIGNAL SHADERS ---
 VERT_SHADER = """
 #version 120
-attribute float a_position;      
-attribute vec3 a_index;          
-attribute vec3 a_color;          
-attribute float a_y_scale;       
+attribute float a_position;
+attribute vec3 a_index;
+attribute vec3 a_color;
+attribute float a_y_scale;
 
-uniform float u_offset;          
-uniform vec2 u_scale;            
-uniform vec2 u_size;             
-uniform float u_n_samples;       
-uniform mat4 u_projection;       
+uniform float u_offset;
+uniform vec2 u_scale;
+uniform vec2 u_size;
+uniform float u_n_samples;
+uniform mat4 u_projection;
 
 varying vec4 v_color;
 
 void main() {
     float channel_idx = a_index.x;
     float sample_idx = a_index.y;
-    
+
     // Ring Buffer Logic
     float current_x = mod(sample_idx - u_offset + u_n_samples, u_n_samples);
-    
+
     // Margins
     float margin_left = 0.12;   // Increased for Y-ticks
     float margin_right = 0.05;
     float plot_width = 1.0 - margin_left - margin_right;
-    
+
     float x = margin_left + plot_width * (current_x / u_n_samples);
 
     // Y position (Stacking)
     float margin_bottom = 0.05;
     float plot_height = 1.0 - margin_bottom;
-    
+
     float slot_height = plot_height / u_size.x;
     float slot_bottom = margin_bottom + (channel_idx * slot_height);
     float slot_center = slot_bottom + (slot_height * 0.5);
-    
+
     // Scale: 0.45 leaves 10% padding between channels
     float y = slot_center + (a_position * slot_height * 0.45 * a_y_scale);
-    
+
     gl_Position = u_projection * vec4(x * u_scale.x, y, 0.0, 1.0);
     v_color = vec4(a_color, 1.0);
 }
@@ -633,8 +633,25 @@ class RealtimeViewer:
                 if curr_grp == grp:
                     ch["range"] /= scale
 
+    # --- ADDED THIS METHOD TO MATCH OLD STRUCTURE ---
+    def show(self):
+        """Show the canvas and start the event loop."""
+        self.canvas.show()
+
+        @self.canvas.connect
+        def on_close(event):
+            self.timer.stop()
+            for stream in self.streams:
+                stream.disconnect()
+            if self.verbose:
+                print("Viewer closed.")
+
+        # In view_old.py, app.run() is called in the view() function,
+        # so we just show the canvas here.
+
 
 def view(stream_name=None, window_duration=10.0, **kwargs):
+    configure_lsl_api_cfg()
     from mne_lsl.stream import StreamLSL
 
     print("Connecting to Streams...")
@@ -659,5 +676,11 @@ def view(stream_name=None, window_duration=10.0, **kwargs):
         print("Error: No streams found. Is 'openmuse-stream' running?")
         return
 
+    # Instantiate viewer
     v = RealtimeViewer(streams, window_duration=window_duration, **kwargs)
-    app.run()
+    v.show()  # Explicit show() before run()
+
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        pass
