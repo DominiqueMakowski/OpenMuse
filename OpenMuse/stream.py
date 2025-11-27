@@ -570,6 +570,78 @@ class RobustClock:
         # Simple offset model: lsl_time = device_time + offset
         return device_times + self._offset
 
+class AdaptiveClock:
+    """
+    Improved clock synchronizer that adapts quickly to latency drops (e.g. connection
+    interval changes) but resists jitter spikes.
+    """
+
+    def __init__(
+        self,
+        window_seconds: float = 10.0,
+        percentile: float = 5.0, # Lower percentile (5th) to track min-latency better
+        final_alpha: float = 0.02,
+        initial_alpha: float = 1.0, # Start by trusting the measurement 100%
+        warmup_packets: int = 500, # Approx 2 seconds at 256Hz
+    ):
+        self.window_seconds = window_seconds
+        self.percentile = percentile
+        self.final_alpha = final_alpha
+        self.current_alpha = initial_alpha
+        self.warmup_packets = warmup_packets
+
+        self._history: deque = deque()
+        self._offset = 0.0
+        self.initialized = False
+        self.packets_processed = 0
+
+    def update(self, device_time: float, lsl_now: float):
+        current_offset = lsl_now - device_time
+        self.packets_processed += 1
+
+        if not self.initialized:
+            self._offset = current_offset
+            self.initialized = True
+            self._history.append((device_time, current_offset))
+            return
+
+        # 1. Update History
+        self._history.append((device_time, current_offset))
+        cutoff_time = device_time - self.window_seconds
+        while self._history and self._history[0][0] < cutoff_time:
+            self._history.popleft()
+
+        # 2. Decay Alpha (Warmup Phase)
+        # Linearly decay alpha from 1.0 down to 0.02 over the warmup period
+        if self.packets_processed < self.warmup_packets:
+            progress = self.packets_processed / self.warmup_packets
+            self.current_alpha = self.current_alpha * (1 - progress) + self.final_alpha * progress
+        else:
+            self.current_alpha = self.final_alpha
+
+        # 3. Calculate Target Offset (Low Percentile)
+        if len(self._history) >= 5:
+            offsets = np.array([o for _, o in self._history])
+            # Use 5th percentile to track the "fastest" packets (minimum latency)
+            target_offset = np.percentile(offsets, self.percentile)
+
+            # 4. Asymmetric Update
+            # If target is LOWER (less latency), adapt faster (trust the improvement).
+            # If target is HIGHER (more lag), adapt slower (suspect buffer bloat).
+            effective_alpha = self.current_alpha
+            if target_offset < self._offset:
+                # We found a better (lower latency) path. Adapt 5x faster.
+                effective_alpha = min(1.0, self.current_alpha * 5.0)
+
+            self._offset = (effective_alpha * target_offset) + ((1 - effective_alpha) * self._offset)
+        else:
+            # Fallback for very first few samples
+            self._offset = (self.current_alpha * current_offset) + ((1 - self.current_alpha) * self._offset)
+
+    def map_time(self, device_times: np.ndarray) -> np.ndarray:
+        if not self.initialized:
+            return device_times
+        return device_times + self._offset
 
 @dataclass
 class SensorStream:
@@ -585,7 +657,8 @@ class SensorStream:
     sample_counter: int = 0
 
     # --- Robust Clock Sync ---
-    clock: RobustClock = field(default_factory=RobustClock)
+    clock: AdaptiveClock = field(default_factory=AdaptiveClock)
+    # clock: RobustClock = field(default_factory=RobustClock)
     # clock: StableClock = field(default_factory=StableClock)
     # clock: WindowedClock = field(default_factory=WindowedClock)
     last_update_device_time: float = -1.0
