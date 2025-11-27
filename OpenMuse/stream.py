@@ -585,8 +585,8 @@ class SensorStream:
     sample_counter: int = 0
 
     # --- Robust Clock Sync ---
-    clock: RobustClock = field(default_factory=RobustClock)
-    # clock: StableClock = field(default_factory=StableClock)
+    # clock: RobustClock = field(default_factory=RobustClock)
+    clock: StableClock = field(default_factory=StableClock)
     # clock: WindowedClock = field(default_factory=WindowedClock)
     last_update_device_time: float = -1.0
 
