@@ -12,7 +12,6 @@ Features:
 import time
 import numpy as np
 from vispy import app, gloo
-from pylsl import resolve_streams
 from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
 from .utils import configure_lsl_api_cfg
@@ -560,6 +559,7 @@ class RealtimeViewer:
 def view(stream_name=None, window_duration=10.0, **kwargs):
     configure_lsl_api_cfg()
     from mne_lsl.stream import StreamLSL
+    from mne_lsl.lsl import resolve_streams
 
     print("Connecting to Streams...")
     streams = []
@@ -575,13 +575,18 @@ def view(stream_name=None, window_duration=10.0, **kwargs):
             if stream_name == info.name():
                 found_names.append(info.name())
 
-        # If not found exactly, maybe the user provided the full name but resolve_streams missed it (rare)
-        # or they provided a substring? Let's assume if they provide a name, they want that.
+        # If not found exactly, try substring match
+        if not found_names:
+            for info in infos:
+                if stream_name in info.name():
+                    found_names.append(info.name())
+
+        # If still not found, maybe the user provided the full name but resolve_streams missed it (rare)
         if not found_names:
             # Fallback: try to connect to it directly (maybe it wasn't resolved yet)
             found_names = [stream_name]
     else:
-        # Auto-detect Muse streams (Muse-ID_Type or Muse_Type)
+        # Auto-detect Muse streams (format: Muse-TYPE (DEVICE_ID))
         for info in infos:
             n = info.name()
             if "Muse" in n:

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.8]
+
+### Changed
+- **Stream Naming Convention**: Updated LSL stream names to include device identifiers for better multi-device support.
+  - Muse: `Muse-{sensor_type} ({device_id})` (e.g., `Muse-EEG (0055DA)`)
+  - BITalino: `BITalino ({address})` (e.g., `BITalino (20:17:09:18:49:99)`)
+- **Clock Synchronization**: Refactored clock synchronization logic into a dedicated `clocks.py` module.
+- **CLI**: Added `--clock` argument to `stream` command to select synchronization model.
+- **Viewer**: Updated `view` and `view_bitalino` to support fuzzy matching for stream names.
+- **Dependencies**: Replaced `pylsl` with `mne_lsl` for stream resolution.
+
+
+
 ## [0.1.2]
 
 ### Added
