@@ -12,6 +12,7 @@ Features:
 import time
 import numpy as np
 from vispy import app, gloo
+from pylsl import resolve_streams
 from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
 from .utils import configure_lsl_api_cfg
@@ -563,12 +564,38 @@ def view(stream_name=None, window_duration=10.0, **kwargs):
     print("Connecting to Streams...")
     streams = []
 
-    # Auto-detect including battery
-    targets = ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS", "Muse_BATTERY"]
-    if stream_name:
-        targets = [stream_name]
+    # Resolve all available streams
+    print("Scanning for available LSL streams...")
+    infos = resolve_streams()
+    found_names = []
 
-    for name in targets:
+    if stream_name:
+        # If a specific name is requested, try to find it exactly or as a substring
+        for info in infos:
+            if stream_name == info.name():
+                found_names.append(info.name())
+
+        # If not found exactly, maybe the user provided the full name but resolve_streams missed it (rare)
+        # or they provided a substring? Let's assume if they provide a name, they want that.
+        if not found_names:
+            # Fallback: try to connect to it directly (maybe it wasn't resolved yet)
+            found_names = [stream_name]
+    else:
+        # Auto-detect Muse streams (Muse-ID_Type or Muse_Type)
+        for info in infos:
+            n = info.name()
+            if "Muse" in n:
+                if any(t in n for t in ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]):
+                    found_names.append(n)
+
+        # Remove duplicates
+        found_names = list(set(found_names))
+
+    if not found_names:
+        print("No Muse streams found. Is 'openmuse-stream' running?")
+        return
+
+    for name in found_names:
         try:
             bufsize = window_duration if "BATTERY" not in name else 5.0
             s = StreamLSL(bufsize=bufsize, name=name)

@@ -131,7 +131,7 @@ def main(argv=None):
     p_view.add_argument(
         "--stream-name",
         default=None,
-        help="Name of specific LSL stream to visualize (default: None = show all available streams: Muse_EEG + Muse_ACCGYRO)",
+        help="Name (or substring) of specific LSL stream to visualize (default: None = auto-detect Muse streams)",
     )
     p_view.add_argument(
         "--window",
@@ -221,7 +221,7 @@ def main(argv=None):
     p_view_bitalino.add_argument(
         "--stream-name",
         default="BITalino",
-        help="Name of the LSL stream to visualize (default: BITalino)",
+        help="Name (or substring) of the LSL stream to visualize (default: BITalino)",
     )
     p_view_bitalino.add_argument(
         "--window",

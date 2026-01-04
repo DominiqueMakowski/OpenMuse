@@ -209,7 +209,7 @@ def create_stream_outlet(
     elif sensor_type == "ACCGYRO":
         ch_names = list(ACCGYRO_CHANNELS)
         sfreq = 52.0
-        stype = "ACC_GYRO"
+        stype = "ACCGYRO"
         source_id = f"{device_id}_accgyro"
     elif sensor_type == "OPTICS":
         ch_names = select_optics_channels(n_channels)
@@ -225,7 +225,7 @@ def create_stream_outlet(
         raise ValueError(f"Unknown sensor type: {sensor_type}")
 
     info = StreamInfo(
-        name=f"Muse_{sensor_type}",
+        name=f"Muse-{sensor_type} ({device_id})",
         stype=stype,
         n_channels=len(ch_names),
         sfreq=sfreq,

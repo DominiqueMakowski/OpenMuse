@@ -23,6 +23,7 @@ import numpy as np
 from bleak import BleakClient, BleakScanner
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 from mne_lsl.stream import StreamLSL
+from pylsl import resolve_streams
 
 from .backends import BleakBackend
 from .clocks import ConstrainedRLSClock
@@ -329,7 +330,7 @@ async def stream_bitalino(
     n_channels_lsl = len(channel_names)
 
     info = StreamInfo(
-        name="BITalino",
+        name=f"BITalino ({address})",
         stype="BioSignals",
         n_channels=n_channels_lsl,
         sfreq=float(sampling_rate),
@@ -516,10 +517,36 @@ def view_bitalino(stream_name="BITalino", window_duration=10.0):
     """
     configure_lsl_api_cfg()
 
-    print(f"Looking for LSL stream: '{stream_name}'...")
+    print(f"Looking for LSL stream matching: '{stream_name}'...")
+
+    # Resolve streams to find the full name (e.g. BITalino-AA:BB:CC...)
+    infos = resolve_streams()
+    target_name = None
+
+    # 1. Exact match
+    for info in infos:
+        if info.name() == stream_name:
+            target_name = info.name()
+            break
+
+    # 2. Substring match (if default "BITalino" is used, it matches "BITalino-AA:BB...")
+    if not target_name:
+        for info in infos:
+            if stream_name in info.name():
+                target_name = info.name()
+                break
+
+    if target_name:
+        print(f"Found stream: {target_name}")
+    else:
+        target_name = stream_name
+        print(
+            f"Stream matching '{stream_name}' not found in resolve. Trying direct connection..."
+        )
+
     try:
         # bufsize defines the internal buffer of the StreamLSL object
-        s = StreamLSL(bufsize=window_duration, name=stream_name)
+        s = StreamLSL(bufsize=window_duration, name=target_name)
         s.connect(timeout=5.0)
     except Exception as e:
         print(f"Error: Could not connect to stream '{stream_name}'.")
