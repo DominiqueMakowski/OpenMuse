@@ -102,6 +102,12 @@ To visualize live LSL streams, open a new terminal (while the streaming is runni
 OpenMuse view
 ```
 
+If you have multiple Muse devices streaming, you can filter by MAC address:
+
+```powershell
+OpenMuse view --address <your-muse-address>
+```
+
 ## Technical Details
 
 ### Specs

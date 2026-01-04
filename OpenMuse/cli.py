@@ -129,6 +129,12 @@ def main(argv=None):
         help="Visualize EEG and ACC/GYRO data from LSL streams in real-time",
     )
     p_view.add_argument(
+        "--address",
+        default=None,
+        help="MAC address to filter streams by (e.g., 00:55:DA:B9:73:D5). "
+        "Only streams from this device will be shown. Useful with multiple devices.",
+    )
+    p_view.add_argument(
         "--stream-name",
         default=None,
         help="Name (or substring) of specific LSL stream to visualize (default: None = auto-detect Muse streams)",
@@ -149,6 +155,7 @@ def main(argv=None):
 
         view(
             stream_name=ns.stream_name,
+            address=ns.address,
             window_duration=ns.window,
             verbose=True,
         )

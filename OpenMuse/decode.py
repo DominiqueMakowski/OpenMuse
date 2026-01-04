@@ -112,7 +112,7 @@ SENSORS = {
         "n_channels": 0,
         "n_samples": 0,
         "rate": 0.0,
-        "data_len": 196,
+        "data_len": 196,  # 196 used as placeholder; actual packets vary 188-230 bytes
     },
     0x98: {
         "type": "BATTERY",

@@ -123,6 +123,14 @@ class RealtimeViewer:
                     col = color_opt
                     rng = 1000.0
 
+                # Determine sort order: EEG=0, ACCGYRO=1, OPTICS=2
+                if is_eeg:
+                    sort_order = 0
+                elif "ACC" in ch_name or "GYRO" in ch_name:
+                    sort_order = 1
+                else:
+                    sort_order = 2
+
                 self.channel_info.append(
                     {
                         "stream_idx": s_idx,
@@ -132,12 +140,20 @@ class RealtimeViewer:
                         "range": rng,  # Full span (Top - Bottom)
                         "scale": 1.0,
                         "is_eeg": is_eeg,
-                        "data_idx": self.total_channels,
+                        "sort_order": sort_order,
                         "dc_offset": 0.0,
                         "quality_buf": [],
                     }
                 )
-                self.total_channels += 1
+
+        # Sort channels for consistent display order: EEG at top, then ACCGYRO, then OPTICS at bottom
+        # Lower sort_order appears at TOP of display (higher data_idx)
+        self.channel_info.sort(key=lambda c: (c["sort_order"], c["name"]), reverse=True)
+
+        # Assign data_idx after sorting
+        for idx, ch in enumerate(self.channel_info):
+            ch["data_idx"] = idx
+            self.total_channels = idx + 1
 
         self.master_sfreq = max_sfreq
         self.n_samples = int(self.window_duration * self.master_sfreq)
@@ -409,6 +425,7 @@ class RealtimeViewer:
         h_plot = 1.0 - margin_bottom
 
         # Update Battery Label Text
+        # Only show battery if we have a battery stream AND have received data
         if self.battery_level is not None:
             self.lbl_bat.text = f"{self.battery_level:.0f}%"
             if self.battery_level > 50:
@@ -417,6 +434,9 @@ class RealtimeViewer:
                 self.lbl_bat.color = "yellow"
             else:
                 self.lbl_bat.color = "red"
+        elif self.battery_stream_idx is None:
+            # No battery stream available - hide the label
+            self.lbl_bat.text = ""
 
         for ch in self.channel_info:
             # Channel slot geometry in pixels
@@ -556,7 +576,16 @@ class RealtimeViewer:
                 print("Viewer closed.")
 
 
-def view(stream_name=None, window_duration=10.0, **kwargs):
+def view(stream_name=None, address=None, window_duration=10.0, **kwargs):
+    """View LSL streams in real-time.
+
+    Args:
+        stream_name: Name (or substring) of specific LSL stream to visualize.
+        address: MAC address to filter streams by. If provided, only streams
+                 containing this address in their name will be shown.
+                 Useful when multiple Muse devices are streaming.
+        window_duration: Time window to display in seconds.
+    """
     configure_lsl_api_cfg()
     from mne_lsl.stream import StreamLSL
     from mne_lsl.lsl import resolve_streams
@@ -591,7 +620,9 @@ def view(stream_name=None, window_duration=10.0, **kwargs):
             n = info.name
             if "Muse" in n:
                 if any(t in n for t in ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]):
-                    found_names.append(n)
+                    # If address filter is specified, only include matching streams
+                    if address is None or address in n:
+                        found_names.append(n)
 
         # Remove duplicates
         found_names = list(set(found_names))
