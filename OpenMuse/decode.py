@@ -104,6 +104,16 @@ SENSORS = {
         "rate": 0.0,
         "data_len": 24,
     },
+    # 0x88: New firmware combined/metadata packet - structure TBD
+    # Contains 196 bytes of data, appears to bundle multiple sensor types
+    # For now, mark as Unknown to allow parsing to continue without errors
+    0x88: {
+        "type": "Unknown",
+        "n_channels": 0,
+        "n_samples": 0,
+        "rate": 0.0,
+        "data_len": 196,
+    },
     0x98: {
         "type": "BATTERY",
         "n_channels": 1,
@@ -305,9 +315,11 @@ def _parse_packets(payload: bytes, message_time: datetime, uuid: str) -> List[Di
         pkt_type = pkt_config["type"] if pkt_config else None
 
         # Validate packet
+        # Note: byte_13 is NOT always 0 in newer firmware versions.
+        # It appears to be a sequence counter or metadata field.
+        # Removed byte_13 == 0 check for compatibility with new firmware.
         pkt_valid = (
             pkt_type is not None
-            and byte_13 == 0
             and pkt_len == len(pkt_bytes)
             and pkt_len >= PACKET_HEADER_SIZE
         )
