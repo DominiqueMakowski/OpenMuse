@@ -1,1078 +1,547 @@
-"""Real-time visualization using GLOO (OpenGL) for maximum performance with many channels."""
+"""
+Robust OpenMuse Viewer (Visual Enhanced)
+========================================
+Architecture: GPU Ring Buffer with Master Clock Synchronization.
+Features:
+- Synchronization: Upsamples aux streams to match EEG.
+- Stability: EMA for DC offset removal.
+- Performance: Static Ring Buffer (Low CPU).
+- Visuals: Battery Text (Top Right), Y-Axis Ticks, Detailed Grid, Signal Quality.
+"""
 
 import time
-from typing import Optional, Sequence
-
 import numpy as np
 from vispy import app, gloo
 from vispy.util.transforms import ortho
 from vispy.visuals import TextVisual
-
-from collections import deque
-
 from .utils import configure_lsl_api_cfg
 
-# Visualization constants
-CHANNEL_DETECTION_DURATION = 2.0  # Seconds to collect data for channel detection
-CHANNEL_STATS_BUFFER_DURATION = (
-    1.5  # Seconds of data for statistics (EEG std, running mean)
-)
-CHANNEL_VARIANCE_THRESHOLD = 1e-10  # Variance threshold to consider channel active
-CHANNEL_MEAN_THRESHOLD = 1e-6  # Mean threshold to consider channel active
-
-# Vertex shader - processes each vertex position
+# --- SIGNAL SHADERS ---
 VERT_SHADER = """
 #version 120
+attribute float a_position;
+attribute vec3 a_index;
+attribute vec3 a_color;
+attribute float a_y_scale;
 
-// Vertex attributes
-attribute float a_position;      // Y value of the data point
-attribute vec3 a_index;           // (channel_index, sample_index, unused)
-attribute vec3 a_color;           // RGB color for this channel
-attribute float a_y_scale;        // Per-channel amplitude scale
+uniform float u_offset;
+uniform vec2 u_scale;
+uniform vec2 u_size;
+uniform float u_n_samples;
+uniform mat4 u_projection;
 
-// Uniforms (constants for all vertices)
-uniform vec2 u_scale;             // (x_scale, unused) for x-axis zooming
-uniform vec2 u_size;              // (n_channels, 1)
-uniform float u_n_samples;        // Number of samples per channel
-uniform mat4 u_projection;        // Projection matrix
-
-// Output to fragment shader
 varying vec4 v_color;
 
 void main() {
-    // Calculate normalized coordinates
     float channel_idx = a_index.x;
     float sample_idx = a_index.y;
-    
-    // X position: Leave space on left for channel names and ticks
-    float x_margin_left = 0.12;   // 12% left margin for labels/ticks
-    float x_margin_right = 0.05;  // 5% right margin (blank space)
 
-    float x = x_margin_left + (1.0 - x_margin_left - x_margin_right) * (sample_idx / u_n_samples);
+    // Ring Buffer Logic
+    float current_x = mod(sample_idx - u_offset + u_n_samples, u_n_samples);
 
-    // Y position: stack channels vertically with bottom margin for x-axis labels
-    float y_bottom_margin = 0.03;  // 3% bottom margin for x-axis time labels
-    float y_usable_height = 1.0 - y_bottom_margin;
-    
-    // Each channel gets 1/n_channels of usable vertical space
-    float y_offset = y_bottom_margin + (channel_idx / u_size.x) * y_usable_height;
-    float y_scale = y_usable_height / u_size.x;  // Height allocated to each channel
-    
-    // Center the signal within its allocated space
-    // a_position is normalized to [-1, 1], scale by 0.35 to use more space
-    // a_y_scale controls per-channel amplitude scaling (mouse wheel zoom)
-    float y = y_offset + y_scale * 0.5 + (a_position * y_scale * 0.35 * a_y_scale);
-    
-    // Apply projection (only apply x scale to x coordinate)
+    // Margins
+    float margin_left = 0.12;
+    float margin_right = 0.05;
+    float plot_width = 1.0 - margin_left - margin_right;
+
+    float x = margin_left + plot_width * (current_x / u_n_samples);
+
+    // Y position (Stacking)
+    float margin_bottom = 0.05;
+    float plot_height = 1.0 - margin_bottom;
+
+    float slot_height = plot_height / u_size.x;
+    float slot_bottom = margin_bottom + (channel_idx * slot_height);
+    float slot_center = slot_bottom + (slot_height * 0.5);
+
+    // Scale: 0.45 leaves 10% padding between channels
+    float y = slot_center + (a_position * slot_height * 0.45 * a_y_scale);
+
     gl_Position = u_projection * vec4(x * u_scale.x, y, 0.0, 1.0);
-    
-    // Pass color to fragment shader
     v_color = vec4(a_color, 1.0);
 }
 """
 
-# Fragment shader - determines pixel colors
 FRAG_SHADER = """
 #version 120
-
 varying vec4 v_color;
-
-void main() {
-    gl_FragColor = v_color;
-}
+void main() { gl_FragColor = v_color; }
 """
 
+
 class RealtimeViewer:
-    """High-performance real-time signal viewer using GLOO."""
-
-    def _detect_active_channels(self, streams, verbose):
-        """Detect which channels have actual data (non-zero variance)."""
-        import time as time_module
-
-        if verbose:
-            print("Detecting active channels (collecting 2 seconds of data)...")
-
-        self.active_channels = []
-
-        for stream in streams:
-            # Get number of channels from channel names list
-            ch_names = stream.info.ch_names
-            n_channels = len(ch_names)
-
-            # Collect data for CHANNEL_DETECTION_DURATION seconds to detect active channels
-            time_module.sleep(CHANNEL_DETECTION_DURATION)
-
-            try:
-                data, timestamps = stream.get_data(winsize=CHANNEL_DETECTION_DURATION)
-            except Exception as e:
-                if verbose:
-                    print(f"  Warning: Could not get data from {stream.name}: {e}")
-                # Mark all channels as active if we can't detect
-                self.active_channels.append([True] * n_channels)
-                continue
-
-            if data.shape[1] == 0:
-                # No data yet, mark all as active
-                self.active_channels.append([True] * n_channels)
-                continue
-
-            # Check variance for each channel
-            channel_active = []
-            for ch_idx in range(n_channels):
-                ch_data = data[ch_idx, :]
-                variance = np.var(ch_data)
-                # Consider active if variance > threshold or mean != 0
-                is_active = (
-                    variance > CHANNEL_VARIANCE_THRESHOLD
-                    or np.abs(np.mean(ch_data)) > CHANNEL_MEAN_THRESHOLD
-                )
-                channel_active.append(is_active)
-
-            self.active_channels.append(channel_active)
-
-            # Report findings
-            if verbose:
-                active_names = [
-                    ch_names[i] for i, active in enumerate(channel_active) if active
-                ]
-                n_active = len(active_names)
-                print(
-                    f"  {stream.name}: {n_active} active channel{'s' if n_active != 1 else ''}"
-                )
-
-        if verbose:
-            print()
-
     def __init__(
-        self,
-        streams: Sequence,
-        window_size: float = 10.0,
-        update_interval: float = 0.005,
-        duration: Optional[float] = None,
-        verbose: bool = True,
+        self, streams, window_duration=10.0, update_interval=0.02, verbose=True
     ):
         self.streams = streams
-        self.window_size = window_size
-        self.update_interval = update_interval
-        self.duration = duration
+        self.window_duration = window_duration
         self.verbose = verbose
         self.start_time = time.time()
 
-        # Collect channel info from all streams
-        # First, detect active channels (non-zero variance)
-        self._detect_active_channels(streams, verbose)
-
-        self.channel_info = []  # List of (stream_idx, ch_idx, ch_name, color, y_range)
+        # --- 1. Channel Configuration ---
+        self.channel_info = []
         self.total_channels = 0
+        self.battery_stream_idx = None
+        self.battery_level = None  # 0-100
 
-        # Color schemes
-        eeg_colors = [
-            (0 / 255, 206 / 255, 209 / 255),  # Cyan
-            (65 / 255, 105 / 255, 225 / 255),  # Royal Blue
-            (30 / 255, 144 / 255, 255 / 255),  # Dodger Blue
-            (0 / 255, 191 / 255, 255 / 255),  # Deep Sky Blue
-        ]
-        acc_color = (141 / 255, 182 / 255, 0 / 255)  # Apple green
-        gyro_color = (152 / 255, 255 / 255, 152 / 255)  # Mint green
-        optics_colors = [
-            (255 / 255, 165 / 255, 0 / 255),  # Orange
-            (255 / 255, 99 / 255, 71 / 255),  # Tomato
-            (220 / 255, 20 / 255, 60 / 255),  # Crimson
-            (255 / 255, 69 / 255, 0 / 255),  # Red-Orange
-        ]
+        # Colors
+        colors_eeg = [(0, 1, 1), (0, 0.5, 1), (0, 0, 1), (0.5, 0, 1)]  # Cyans/Blues
+        color_acc = (0.6, 0.8, 0.2)  # Greenish
+        color_gyro = (0.8, 0.6, 0.2)  # Orangeish
+        color_opt = (1, 0, 0)  # Red
 
-        for stream_idx, stream in enumerate(streams):
-            stream_name = stream.name
-            is_eeg = "EEG" in stream_name.upper()
-            is_optics = "OPTICS" in stream_name.upper()
+        # Identify streams
+        max_sfreq = 0
+        self.master_stream_idx = 0
 
-            if "BATTERY" in stream_name.upper():
-                self.battery_stream_idx = stream_idx
+        for s_idx, stream in enumerate(streams):
+            s_name = stream.name
+
+            # Handle Battery Stream Separately
+            if "BATTERY" in s_name.upper():
+                self.battery_stream_idx = s_idx
                 continue
 
-            for ch_idx, ch_name in enumerate(stream.info.ch_names):
-                # Skip inactive channels (zero-padded)
-                if not self.active_channels[stream_idx][ch_idx]:
-                    continue
-                # Determine color and display range (for proper scaling)
-                # Range is the total vertical span; signals will be centered around their mean
+            sfreq = stream.info["sfreq"]
+            if sfreq > max_sfreq:
+                max_sfreq = sfreq
+                self.master_stream_idx = s_idx
+
+            is_eeg = "EEG" in s_name.upper()
+
+            for ch_i, ch_name in enumerate(stream.info.ch_names):
                 if is_eeg:
-                    color = eeg_colors[ch_idx % len(eeg_colors)]
-                    y_range = 1000.0  # Default range: max - min of original limits
-                    y_ticks = [-500, 0, 500]  # Relative to center
-                elif is_optics:
-                    color = optics_colors[ch_idx % len(optics_colors)]
-                    y_range = 0.4
-                    y_ticks = [-1.0, 0, 1.0]  # Relative to center
-                elif "ACC" in ch_name.upper():
-                    color = acc_color
-                    y_range = 2.0  # 1 - (-1) = 2.0
-                    y_ticks = [-1, 0, 1]  # Relative to center
-                else:  # GYRO
-                    color = gyro_color
-                    y_range = 490.0  # 245 - (-245) = 490
-                    y_ticks = [-150, 0, 150]  # Relative to center
+                    col = colors_eeg[ch_i % 4]
+                    rng = 800.0  # uV
+                elif "ACC" in ch_name:
+                    col = color_acc
+                    rng = 2.0  # G
+                elif "GYRO" in ch_name:
+                    col = color_gyro
+                    rng = 300.0  # deg/s
+                else:
+                    col = color_opt
+                    rng = 1000.0
 
                 self.channel_info.append(
                     {
-                        "stream_idx": stream_idx,
-                        "ch_idx": ch_idx,
+                        "stream_idx": s_idx,
+                        "ch_idx": ch_i,
                         "name": ch_name,
-                        "color": color,
-                        "y_range": y_range,  # Total vertical span
-                        "y_ticks": y_ticks,  # Tick values relative to center
-                        "y_scale": 1.0,  # Individual channel group scale
-                        "y_mean": 0.0,  # Running mean (updated each frame)
+                        "color": col,
+                        "range": rng,  # Full span (Top - Bottom)
+                        "scale": 1.0,
+                        "is_eeg": is_eeg,
+                        "data_idx": self.total_channels,
+                        "dc_offset": 0.0,
+                        "quality_buf": [],
                     }
                 )
                 self.total_channels += 1
 
-        # Determine number of samples to display
-        # Use the highest sampling rate to ensure smooth display
-        max_sfreq = max(stream.info["sfreq"] for stream in streams)
-        self.n_samples = int(max_sfreq * window_size)
-
-        # Initialize data buffer (n_samples x n_channels)
-        self.data = np.zeros((self.n_samples, self.total_channels), dtype=np.float32)
-
-        # Create window title
-        if len(streams) == 1:
-            window_title = f"OpenMuse - {streams[0].name}"
-        else:
-            window_title = f"OpenMuse - {self.total_channels} channels"
-
-        # Create canvas
-        self.canvas = app.Canvas(
-            title=window_title,
-            keys="interactive",
-            size=(1400, 900),
-            position=(100, 100),
-        )
-
-        # Detect Muse_BATTERY stream
-        self.battery_stream_idx = None
-        for stream_idx, s in enumerate(streams):
-            if "BATTERY" in s.name.upper():
-                self.battery_stream_idx = stream_idx
-                break
-
-        # Battery visualizer setup
-        self.battery_history = deque(maxlen=180)
-        self.battery_level = None  # 0–100%
-
-        # Battery text label
-        self.battery_text = TextVisual(
-            "Battery: ---%",
-            pos=(0.97, 0.96),  # near top-right corner
-            color="yellow",
-            font_size=6,
-            anchor_x="right",
-            anchor_y="bottom",
-            bold=True,
-        )
-        self.battery_text.transforms.configure(
-            canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-        )
-
-        # Battery bar shaders
-        BAT_VERT = """
-        attribute vec2 a_position;
-        uniform mat4 u_projection;
-        void main() {
-            gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
-        }
-        """
-        BAT_FRAG = """
-        uniform vec4 u_color;
-        void main() {
-            gl_FragColor = u_color;
-        }
-        """
-
-        # Programs for battery bar background and fill
-        self.battery_prog_bg = gloo.Program(BAT_VERT, BAT_FRAG)
-        self.battery_prog_fill = gloo.Program(BAT_VERT, BAT_FRAG)
-
-        self._battery_bg_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
-        self._battery_fill_vbo = gloo.VertexBuffer(np.zeros((4, 2), dtype=np.float32))
-        self.battery_prog_bg["a_position"] = self._battery_bg_vbo
-        self.battery_prog_fill["a_position"] = self._battery_fill_vbo
-
-        # Create GLOO program for signals
-        self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
-
-        # Build vertex data (needs self.program to exist)
-        self._create_vertex_data()
-
-        # Create grid lines for better readability
-        self._create_grid_lines()
-
-        # Set uniforms
-        self.program["u_scale"] = (1.0, 1.0)
-        self.program["u_size"] = (self.total_channels, 1.0)
-        self.program["u_n_samples"] = float(self.n_samples)
-        self.program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
-
-        # Create text labels for channel names (y-axis, left side, right-aligned)
-        self.channel_labels = []
-        for ch_idx, ch_info in enumerate(self.channel_info):
-            text = TextVisual(
-                ch_info["name"],
-                pos=(10, 0), # Will be positioned in on_draw
-                color="white",
-                font_size=8,
-                anchor_x="right", 
-                anchor_y="center",
-                bold=True,
-            )
-            text.transforms.configure(
-                canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-            )
-            self.channel_labels.append(text)
-
-        # Create EEG standard deviation labels (impedance values)
-        self.eeg_std_labels = []
-        for ch_idx, ch_info in enumerate(self.channel_info):
-            # Only create std labels for EEG channels
-            stream_name = streams[ch_info["stream_idx"]].name
-            if "EEG" in stream_name.upper():
-                text = TextVisual(
-                    "σ: ---",
-                    pos=(0, 0), # Will be positioned in on_draw
-                    color="yellow",
-                    font_size=8,
-                    anchor_x="right",
-                    anchor_y="center",
-                )
-                text.transforms.configure(
-                    canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-                )
-                self.eeg_std_labels.append((ch_idx, text))
-
-        # Combined buffer for calculating statistics (last CHANNEL_STATS_BUFFER_DURATION seconds of data)
-        # Used for both EEG std (impedance) and running mean (centering all channels)
-        self.channel_stats_buffer = {}
-        for ch_idx, ch_info in enumerate(self.channel_info):
-            sfreq = streams[ch_info["stream_idx"]].info["sfreq"]
-            buffer_size = int(sfreq * CHANNEL_STATS_BUFFER_DURATION)
-            self.channel_stats_buffer[ch_idx] = np.zeros(buffer_size)
-
-        # Create y-axis tick labels for each channel (right-aligned, close to signal edge)
-        # Store base tick values and create/update text labels dynamically
-        self.y_tick_labels = []
-        for ch_idx, ch_info in enumerate(self.channel_info):
-            self.y_tick_labels.append(
-                []
-            )  # Will be populated in _update_y_tick_labels()
-
-        # Create text labels for time axis (x-axis)
-        self.time_labels = []
-        n_time_ticks = int(self.window_size) + 1  # One per second
-        for i in range(n_time_ticks):
-            time_val = -self.window_size + i  # From -window_size to 0
-            text = TextVisual(
-                f"{time_val:.0f}s",
-                pos=(0, 0),  # Will be positioned in on_draw
-                color="white",
-                font_size=7,
-                anchor_x="center",
-                anchor_y="top",
-            )
-            text.transforms.configure(
-                canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-            )
-            self.time_labels.append((time_val, text))
-
-        # Initialize y-tick labels
-        self._update_y_tick_labels(create_new=True)
-        self._apply_dynamic_scaling(*self.canvas.size)
-
-        # Connect events
-        self.canvas.events.draw.connect(self.on_draw)  # type: ignore[attr-defined]
-        self.canvas.events.resize.connect(self.on_resize)  # type: ignore[attr-defined]
-        self.canvas.events.key_press.connect(self.on_key_press)  # type: ignore[attr-defined]
-        self.canvas.events.mouse_wheel.connect(self.on_mouse_wheel)  # type: ignore[attr-defined]
-
-        # Setup timer for updates
-        self.timer = app.Timer(self.update_interval, connect=self.on_timer, start=True)
-
-        # Stats tracking
-        self.stream_stats = [
-            {"first_timestamp": None, "last_timestamp": None, "total_samples": 0}
-            for _ in streams
-        ]
+        self.master_sfreq = max_sfreq
+        self.n_samples = int(self.window_duration * self.master_sfreq)
 
         if verbose:
-            print(f"\nGLOO-based visualization initialized:")
-            print(f"  Total channels: {self.total_channels}")
-            print(f"  Samples per channel: {self.n_samples}")
-            print(f"  Window size: {window_size}s")
-            print(f"  Update rate: {1/update_interval:.0f} Hz")
-            print("\nPress '+' or '-' to zoom time axis")
-            print("Scroll mouse wheel to zoom amplitude")
-            print("Close window to stop.\n")
+            print(f"Viewer Configured: {self.total_channels} signal channels.")
+            if self.battery_stream_idx is not None:
+                print("  + Battery Stream detected.")
 
-    def _create_vertex_data(self):
-        """Create vertex arrays for all channels and samples."""
-        # Create index arrays
-        # a_index: (channel_idx, sample_idx, 0) for each vertex
-        channel_indices = np.repeat(np.arange(self.total_channels), self.n_samples)
-        sample_indices = np.tile(np.arange(self.n_samples), self.total_channels)
+        # --- 2. GPU Memory (Ring Buffer) ---
+        self.data_buffer = np.zeros(
+            (self.n_samples, self.total_channels), dtype=np.float32
+        )
+        self.write_ptr = 0
+        self.last_timestamps = {i: 0.0 for i in range(len(streams))}
 
-        a_index = np.c_[
-            channel_indices, sample_indices, np.zeros(len(channel_indices))
+        # --- 3. VisPy Setup ---
+        self.canvas = app.Canvas(
+            title="OpenMuse Realtime", keys="interactive", size=(1400, 900)
+        )
+
+        # Signal Program
+        self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
+        ch_indices = np.repeat(np.arange(self.total_channels), self.n_samples)
+        sa_indices = np.tile(np.arange(self.n_samples), self.total_channels)
+
+        self.program["a_index"] = np.c_[
+            ch_indices, sa_indices, np.zeros_like(ch_indices)
         ].astype(np.float32)
 
-        # Create color array (each channel has its own color, repeated for all samples)
-        colors = np.array([ch["color"] for ch in self.channel_info], dtype=np.float32)
-        a_color = np.repeat(colors, self.n_samples, axis=0)
-
-        # Create y_scale array (each channel's scale, repeated for all samples)
-        y_scales = np.array(
-            [ch["y_scale"] for ch in self.channel_info], dtype=np.float32
+        colors_flat = np.array(
+            [c["color"] for c in self.channel_info], dtype=np.float32
         )
-        a_y_scale = np.repeat(y_scales, self.n_samples)
+        self.program["a_color"] = np.repeat(colors_flat, self.n_samples, axis=0)
+        self.program["a_y_scale"] = np.ones(
+            self.total_channels * self.n_samples, dtype=np.float32
+        )
+        self.vbo_pos = gloo.VertexBuffer(self.data_buffer.T.ravel().astype(np.float32))
+        self.program["a_position"] = self.vbo_pos
+        self.program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+        self.program["u_size"] = (float(self.total_channels), 1.0)
+        self.program["u_n_samples"] = float(self.n_samples)
+        self.program["u_offset"] = 0.0
+        self.program["u_scale"] = (1.0, 1.0)
 
-        # Set attributes
-        self.program["a_index"] = a_index
-        self.program["a_color"] = a_color
-        self.program["a_y_scale"] = a_y_scale
-        # a_position will be updated each frame with actual data
-        self.program["a_position"] = self.data.T.ravel().astype(np.float32)
+        # we generate indices that define separate lines for every point within a channel, but do NOT bridge the gap between channels.
+        indices = []
+        for i in range(self.total_channels):
+            start = i * self.n_samples
+            # We create segments (0,1), (1,2) ... (N-2, N-1)
+            # We intentionally stop at N-1 and do not connect to N
+            base = np.arange(start, start + self.n_samples - 1, dtype=np.uint32)
 
-        # Create index buffers for each channel to draw them separately
-        self.index_buffers = []
-        for ch_idx in range(self.total_channels):
-            start = ch_idx * self.n_samples
-            end = start + self.n_samples
-            indices = np.arange(start, end, dtype=np.uint32)
-            index_buffer = gloo.IndexBuffer(indices)
-            self.index_buffers.append(index_buffer)
+            # Interleave to create line pairs: [0, 1, 1, 2, 2, 3...]
+            rows = np.vstack((base, base + 1)).T.flatten()
+            indices.append(rows)
 
-    def _create_grid_lines(self):
-        """Create grid lines for horizontal separators and y-axis zero lines."""
-        grid_vert = """
-        attribute vec2 a_position;
-        uniform mat4 u_projection;
-        void main() {
-            gl_Position = u_projection * vec4(a_position, 0.0, 1.0);
-        }
-        """
-        grid_frag = """
-        uniform vec4 u_color;
-        void main() {
-            gl_FragColor = u_color;
-        }
-        """
+        self.index_buffer = gloo.IndexBuffer(np.concatenate(indices))
 
-        self.grid_program = gloo.Program(grid_vert, grid_frag)
-        self.grid_program["u_projection"] = ortho(0, 1, 0, 1, -1, 1)
+        # Grid Program
+        self.prog_grid = gloo.Program(
+            "attribute vec2 pos; uniform mat4 proj; void main() { gl_Position = proj * vec4(pos, 0.0, 1.0); }",
+            "uniform vec4 color; void main() { gl_FragColor = color; }",
+        )
+        self.prog_grid["proj"] = ortho(0, 1, 0, 1, -1, 1)
 
-        # Right-hand column - margins must match shader
-        x_margin_left = 0.12
-        x_margin_right = 0.05
+        # --- 4. Visual Elements ---
+        self._init_labels()
+        self._init_grid_lines()
 
-        # Create horizontal grid lines at y-limits for each channel
-        # These correspond to where the min/max ticks are shown
-        # Signal uses 35% (0.35) of channel height on each side of center
-        # Account for bottom margin (3% reserved for x-axis labels)
-        y_bottom_margin = 0.03
-        y_usable_height = 1.0 - y_bottom_margin
+        # Events
+        self.canvas.events.draw.connect(self.on_draw)
+        self.canvas.events.resize.connect(self.on_resize)
+        self.canvas.events.mouse_wheel.connect(self.on_mouse_wheel)
 
-        y_limit_lines = []
-        for ch_idx in range(self.total_channels):
-            y_offset = y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
-            channel_height = y_usable_height / self.total_channels
-            y_center = y_offset + 0.5 * channel_height
+        # Timer
+        self.timer = app.Timer(update_interval, connect=self.on_timer, start=True)
+        # Force initial resize
+        self.on_resize(type("Event", (object,), {"size": self.canvas.size}))
 
-            # Lines at ±35% from center (matching the 0.35 scale in shader)
-            y_top = y_center + 0.35 * channel_height # Upper y-limit
-            y_bottom = y_center - 0.35 * channel_height # Lower y-limit
+    def _init_labels(self):
+        self.lbl_names = []
+        self.lbl_qual = []
+        self.lbl_ticks = []  # List of tuples (top, zero, bottom)
 
-            # Add top and bottom horizontal lines
-            y_limit_lines.extend([
-                [x_margin_left, y_top],
-                [1.0 - x_margin_right, y_top],
-                [x_margin_left, y_bottom],
-                [1.0 - x_margin_right, y_bottom],
-            ])
-
-        # Add zero lines (center lines)
-        zero_lines = []
-        for ch_idx in range(self.total_channels):
-            y_offset = y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
-            y_center = y_offset + 0.5 * (y_usable_height / self.total_channels)
-            zero_lines.extend([
-                [x_margin_left, y_center],
-                [1.0 - x_margin_right, y_center],
-            ])
-
-        self.y_limit_lines = np.array(y_limit_lines, dtype=np.float32)
-        self.zero_lines = np.array(zero_lines, dtype=np.float32)
-
-    def on_draw(self, event):
-        """Render the scene."""
-        gloo.clear(color=(0.1, 0.1, 0.1, 1.0))  # type: ignore[arg-type]
-
-        # Draw y-limit lines (horizontal lines at min/max of each channel)
-        if len(self.y_limit_lines) > 0:
-            gloo.set_line_width(1.0)
-            self.grid_program["a_position"] = self.y_limit_lines
-            self.grid_program["u_color"] = (0.25, 0.25, 0.25, 1.0)  # Dark gray
-            self.grid_program.draw("lines")
-
-        # Draw zero lines (center of each channel) - thicker and lighter
-        gloo.set_line_width(2.0)
-        self.grid_program["a_position"] = self.zero_lines
-        self.grid_program["u_color"] = (0.35, 0.35, 0.35, 1.0)  # Lighter gray, thicker
-        self.grid_program.draw("lines")
-
-        # Reset line width for signal drawing
-        gloo.set_line_width(1.0)
-
-        # Draw each channel separately to avoid connecting them
-        for index_buffer in self.index_buffers:
-            self.program.draw("line_strip", indices=index_buffer)
-
-        # Draw channel labels and y-ticks
-        width, height = self.canvas.size
-        # Account for bottom margin (3% reserved for x-axis labels)
-        y_bottom_margin = 0.03
-        y_usable_height = 1.0 - y_bottom_margin
-
-        for ch_idx, (text_visual, ch_info) in enumerate(
-            zip(self.channel_labels, self.channel_info)
-        ):
-            # Calculate channel's vertical bounds with bottom margin
-            y_offset = (
-                y_bottom_margin + (ch_idx / self.total_channels) * y_usable_height
+        for ch in self.channel_info:
+            # Channel Name (Left)
+            t = TextVisual(
+                ch["name"], color="white", font_size=8, bold=True, anchor_x="right"
             )
-            channel_height = (y_usable_height / self.total_channels) * height
-            y_bottom = height - (y_offset * height)
-            y_top = y_bottom - channel_height
-            y_center = (y_bottom + y_top) / 2
+            self.lbl_names.append(t)
 
-            # Draw channel name at the left edge (right-aligned)
-            # Increased space to accommodate longer names like "OPTICS_LO_NIR"
-            # Left margin fraction (must match shader’s x_margin_left)
-            x_margin_left = 0.12
-            label_offset_fraction = 0.03
-            label_x_fraction = x_margin_left - label_offset_fraction
-            label_x = width * label_x_fraction
-            text_visual.pos = (label_x, y_center)
-            text_visual.draw()
+            # Quality (Right)
+            q = TextVisual("", color="green", font_size=7, bold=True, anchor_x="left")
+            self.lbl_qual.append(q)
 
-            # Draw y-tick labels for this channel (right-aligned, close to signal edge)
-            # Position ticks to match shader positioning
-            # Place at just before signal starts
-            tick_x = width * (x_margin_left - 0.005)
-            y_range = ch_info["y_range"]
-            y_scale_zoom = ch_info["y_scale"]  # User's zoom level (from mouse wheel)
-
-            for idx, (tick_val, tick_text) in enumerate(self.y_tick_labels[ch_idx]):
-                # tick_val is relative to center (e.g., -500, 0, 500 for EEG)
-                # Normalize: data is normalized as 2.0 * (value - mean) / y_range
-                # For tick_val relative to center: normalized = 2.0 * tick_val / y_range
-                normalized_tick = 2.0 * tick_val / y_range
-
-                # Shader applies: y_center + (normalized * channel_height * 0.35 * y_scale_zoom)
-                # So tick position in pixels:
-                tick_y_offset = normalized_tick * channel_height * 0.35 * y_scale_zoom
-                tick_y = (
-                    y_center - tick_y_offset
-                )  # Subtract because screen y is flipped
-
-                tick_text.pos = (tick_x, tick_y)
-                tick_text.draw()
-
-            # Right margin matches shader's x_margin_right
-            right_margin_fraction = 0.05
-
-            # Compute the signal region's right edge
-            signal_end_x = width * (1.0 - right_margin_fraction)
-
-            # Dynamic offset: scale with window width (proportional, not fixed pixels)
-            # About 4% of window width looks good visually
-            right_offset_fraction = 0.04
-            right_column_x = width * (1.0 - right_margin_fraction + right_offset_fraction)
-
-            # Draw EEG impedance (standard deviation) label
-            for eeg_ch_idx, std_text in self.eeg_std_labels:
-                if eeg_ch_idx == ch_idx:
-                    std_text.pos = (right_column_x, y_center)
-                    std_text.draw()
-                    break
-
-        # Draw time labels (x-axis)
-        x_margin_left = 0.12
-        x_margin_right = 0.05
-        signal_width = width * (1.0 - x_margin_left - x_margin_right)
-        x_start = width * x_margin_left
-
-        # Y position ABOVE the signal region (top)
-        y_signal_top_px = height            # top of usable signal region
-        y_tick_offset_px = height * 0.015   # scalable offset downward
-        y_pos = y_signal_top_px - y_tick_offset_px
-
-        for time_val, text_visual in self.time_labels:
-            # Calculate x position (time_val is negative, from -window_size to 0)
-            # Map to signal area only (after the left margin)
-            x_fraction = (time_val + self.window_size) / self.window_size
-            x_pos = x_start + (x_fraction * signal_width)
-
-            text_visual.pos = (x_pos, y_pos)
-            text_visual.draw()
-
-        # Battery overlay drawing
-        width, height = self.canvas.size
-
-        # Align battery text just above the bar, same right offset
-        bar = self._battery_rect_px
-        # Use dynamically scaled position from _apply_dynamic_scaling
-        bx, by = self._battery_text_pos_px
-        self.battery_text.pos = (bx, by)
-
-        # Update color + label depending on level
-        if self.battery_level is None:
-            # show placeholder even before data arrives
-            self.battery_text.color = "yellow"
-            self.battery_text.text = "BATT: ---%"
-        else:
-            if self.battery_level >= 60:
-                col = (0.2, 0.85, 0.2, 1.0)
-                self.battery_text.color = "lime"
-            elif self.battery_level >= 30:
-                col = (0.95, 0.75, 0.15, 1.0)
-                self.battery_text.color = "yellow"
-            else:
-                col = (0.9, 0.25, 0.2, 1.0)
-                self.battery_text.color = "red"
-            self.battery_text.text = f"BATT: {self.battery_level:.0f}%"
-
-        # Draw battery text
-        self.battery_text.draw()
-
-        # Draw the bar only when we have a level
-        if self.battery_level is not None:
-            x = self._battery_rect_px["x"]
-            y = self._battery_rect_px["y"]
-            w = self._battery_rect_px["w"]
-            h = self._battery_rect_px["h"]
-
-            # Background bar
-            bg = np.array([
-                [x, y], [x + w, y], [x, y + h], [x + w, y + h]
-            ], dtype=np.float32)
-            self._battery_bg_vbo.set_data(bg)
-            self.battery_prog_bg["u_color"] = (0.25, 0.25, 0.25, 1.0)
-            self.battery_prog_bg.draw("triangle_strip")
-
-            # Fill proportional to battery level
-            frac = max(0.0, min(1.0, self.battery_level / 100.0))
-
-            # Use proportional padding so it doesn’t vanish when window is small
-            pad = max(1.0, 0.08 * min(w, h))   # ~8% of bar height/width
-
-            w_fill = max(0.0, frac * (w - 2 * pad))
-            fill = np.array([
-                [x + pad, y + pad],
-                [x + pad + w_fill, y + pad],
-                [x + pad, y + h - pad],
-                [x + pad + w_fill, y + h - pad],
-            ], dtype=np.float32)
-            self._battery_fill_vbo.set_data(fill)
-            self.battery_prog_fill["u_color"] = col
-            self.battery_prog_fill.draw("triangle_strip")
-
-            # Finally draw the text
-            self.battery_text.draw()
-
-    def _apply_dynamic_scaling(self, width: int, height: int):
-        """Dynamically scale text and battery bar based on window size."""
-        base_width, base_height = 1400.0, 900.0
-        scale_x = width / base_width
-        scale_y = height / base_height
-        font_scale = max(0.5, min(2.5, scale_y))
-
-        # Scale all text labels proportionally
-        base_sizes = {
-            "channel": 8,
-            "eeg_std": 8,
-            "time": 6,
-            "tick": 4,
-            "battery": 6,
-        }
-        for text in self.channel_labels:
-            text.font_size = base_sizes["channel"] * font_scale
-        for _, text in self.eeg_std_labels:
-            text.font_size = base_sizes["eeg_std"] * font_scale
-        for _, text in self.time_labels:
-            text.font_size = base_sizes["time"] * font_scale
-        for ch_ticks in self.y_tick_labels:
-            for _, text in ch_ticks:
-                text.font_size = base_sizes["tick"] * font_scale
-        self.battery_text.font_size = base_sizes["battery"] * (0.5 * scale_x + 0.5 * scale_y)
-
-        # Battery bar in pixel coordinates (top-right corner)
-        bar_width = 0.035 * width
-        bar_height = 0.022 * height
-        x = width - bar_width - 0.0075 * width
-
-        # Move the bar higher (smaller fraction = closer to top)
-        y = height * 0.94  # e.g., 8% from bottom instead of 4%
-
-        self._battery_rect_px = dict(x=x, y=y, w=bar_width, h=bar_height)
-
-        # Battery text position
-        bx = x + bar_width
-        by = height * 0.02  # keeps text steady near top-right, independent of bar
-        self._battery_text_pos_px = (bx, by)
-
-        self.battery_prog_bg["u_projection"] = ortho(0, width, 0, height, -1, 1)
-        self.battery_prog_fill["u_projection"] = ortho(0, width, 0, height, -1, 1)
-
-    def on_resize(self, event):
-        """Handle window resize."""
-        gloo.set_viewport(0, 0, *event.size)
-
-        # Update text transforms
-        for text in self.channel_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
-        for _, text in self.eeg_std_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
-        for ch_ticks in self.y_tick_labels:
-            for _, text in ch_ticks:
-                text.transforms.configure(
-                    canvas=self.canvas, viewport=(0, 0, *event.size)
+            # Ticks
+            ticks = []
+            for _ in range(3):
+                tick = TextVisual(
+                    "-", color="gray", font_size=6, anchor_x="right", anchor_y="center"
                 )
-        for _, text in self.time_labels:
-            text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
+                ticks.append(tick)
+            self.lbl_ticks.append(ticks)
 
-        self.battery_text.transforms.configure(canvas=self.canvas, viewport=(0, 0, *event.size))
-
-        # Dynamically scale all text based on window size
-        self._apply_dynamic_scaling(*event.size)
-
-    def _update_time_labels(self):
-        """Update time labels based on current window_size."""
-        # Remove old labels
-        self.time_labels = []
-
-        # Create new labels
-        n_time_ticks = int(self.window_size) + 1  # One per second
-        for i in range(n_time_ticks):
-            time_val = -self.window_size + i  # From -window_size to 0
-            text = TextVisual(
-                f"{time_val:.0f}s",
-                pos=(0, 0),  # Will be positioned in on_draw
-                color="white",
-                font_size=8,
-                anchor_x="center",
+        # Time Axis
+        self.lbl_time = []
+        for i in range(6):
+            t = TextVisual(
+                f"-{self.window_duration * (1 - i/5):.0f}s",
+                color="gray",
+                font_size=7,
                 anchor_y="top",
             )
-            text.transforms.configure(
-                canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-            )
-            self.time_labels.append((time_val, text))
+            self.lbl_time.append(t)
 
-    def _update_y_tick_labels(self, create_new=False):
-        """Update y-axis tick labels based on current channel scales.
-
-        Args:
-            create_new: If True, create new TextVisual objects. If False, just update text.
-        """
-        if create_new or not self.y_tick_labels:
-            # Create new TextVisual objects (first time or forced)
-            self.y_tick_labels = []
-            for ch_idx, ch_info in enumerate(self.channel_info):
-                tick_texts = []
-                y_scale = ch_info["y_scale"]
-                y_mean = ch_info["y_mean"]
-                base_ticks = ch_info["y_ticks"]
-
-                # Scale tick values based on current zoom and center around mean
-                for base_tick in base_ticks:
-                    # Tick shows value relative to current mean, scaled by zoom
-                    actual_tick = y_mean + (base_tick / y_scale)
-
-                    # Format based on magnitude
-                    if abs(actual_tick) >= 10:
-                        tick_str = str(int(actual_tick))
-                    elif abs(actual_tick) >= 1:
-                        tick_str = f"{actual_tick:.1f}"
-                    else:
-                        tick_str = f"{actual_tick:.2f}"
-
-                    text = TextVisual(
-                        tick_str,
-                        pos=(0, 0),  # Will be positioned in on_draw
-                        color="gray",
-                        font_size=6,
-                        anchor_x="right",
-                        anchor_y="center",
-                    )
-                    text.transforms.configure(
-                        canvas=self.canvas, viewport=(0, 0, *self.canvas.size)
-                    )
-                    tick_texts.append(
-                        (base_tick, text)
-                    )  # Store base value for positioning
-                self.y_tick_labels.append(tick_texts)
-        else:
-            # Just update the text content (much faster!)
-            for ch_idx, ch_info in enumerate(self.channel_info):
-                y_scale = ch_info["y_scale"]
-                y_mean = ch_info["y_mean"]
-                base_ticks = ch_info["y_ticks"]
-
-                for tick_idx, (base_tick, text) in enumerate(
-                    self.y_tick_labels[ch_idx]
-                ):
-                    # Tick shows value relative to current mean, scaled by zoom
-                    # base_tick is relative to center (e.g., -1, 0, 1 for ACC)
-                    # Add mean and scale by zoom
-                    actual_tick = y_mean + (base_tick / y_scale)
-
-                    # Format based on magnitude
-                    if abs(actual_tick) >= 10:
-                        tick_str = str(int(actual_tick))
-                    elif abs(actual_tick) >= 1:
-                        tick_str = f"{actual_tick:.1f}"
-                    else:
-                        tick_str = f"{actual_tick:.2f}"
-
-                    # Update text content only (no new object creation)
-                    text.text = tick_str
-
-    def _get_channel_at_y(self, y_pixel):
-        """Get the channel index at a given y pixel coordinate."""
-        if self.total_channels == 0:
-            return None
-
-        height = self.canvas.size[1]
-        # Account for 3% bottom margin
-        bottom_margin = height * 0.03
-        usable_height = height - bottom_margin
-
-        # Each channel gets equal vertical space
-        channel_height = usable_height / self.total_channels
-
-        # Flip y coordinate (canvas is bottom-up, but mouse is top-down)
-        y_from_bottom = height - y_pixel
-
-        # Check if in valid range
-        if y_from_bottom < bottom_margin or y_from_bottom >= height:
-            return None
-
-        # Calculate channel index
-        ch_idx = int((y_from_bottom - bottom_margin) / channel_height)
-        if 0 <= ch_idx < self.total_channels:
-            return ch_idx
-        return None
-
-    def on_key_press(self, event):
-        """Handle keyboard input for time window zooming."""
-        key = getattr(event, "key", None)
-        if key is None or not hasattr(key, "name"):
-            return  # Ignore invalid key events
-
-        if key.name in ["+", "-", "="]:
-            # Time window zoom - change window_size (not u_scale which shifts signals)
-            if key.name in ["+", "="]:
-                # Zoom in - show less time (smaller window)
-                self.window_size = max(1.0, self.window_size * 0.8)
-            else:
-                # Zoom out - show more time (larger window)
-                self.window_size = min(30.0, self.window_size * 1.25)
-
-            # Regenerate time labels with new window size
-            self._update_time_labels()
-            self.canvas.update()
-
-    def on_mouse_wheel(self, event):
-        """Handle mouse wheel for amplitude zoom (per channel group under mouse)."""
-        # event.delta can be a tuple or have different structures depending on platform
-        try:
-            if hasattr(event.delta, "__getitem__"):
-                delta = event.delta[1] if len(event.delta) > 1 else event.delta[0]
-            else:
-                delta = event.delta
-        except (TypeError, IndexError):
-            delta = 0
-
-        if delta != 0:
-            # Get channel under mouse cursor
-            mouse_y = event.pos[1] if hasattr(event, "pos") else None
-            target_ch = self._get_channel_at_y(mouse_y) if mouse_y is not None else None
-
-            if target_ch is not None:
-                # Find the channel group (channels from same stream with similar type)
-                target_info = self.channel_info[target_ch]
-                target_name = target_info["name"]
-
-                # Determine group type
-                if "EEG" in target_name.upper():
-                    group_type = "EEG"
-                elif "OPTICS" in target_name.upper():
-                    group_type = "OPTICS"
-                elif "ACC" in target_name.upper():
-                    group_type = "ACC"
-                elif "GYRO" in target_name.upper():
-                    group_type = "GYRO"
-                else:
-                    group_type = None
-
-                # Scale all channels in the same group
-                dy = np.sign(delta) * 0.1
-                for ch_info in self.channel_info:
-                    ch_name = ch_info["name"]
-                    is_same_group = False
-
-                    if group_type == "EEG" and "EEG" in ch_name.upper():
-                        is_same_group = True
-                    elif group_type == "OPTICS" and "OPTICS" in ch_name.upper():
-                        is_same_group = True
-                    elif group_type == "ACC" and "ACC" in ch_name.upper():
-                        is_same_group = True
-                    elif group_type == "GYRO" and "GYRO" in ch_name.upper():
-                        is_same_group = True
-
-                    if is_same_group:
-                        # Update this channel's scale
-                        current_scale = ch_info["y_scale"]
-                        new_scale = max(0.5, min(5.0, current_scale * np.exp(dy)))
-                        ch_info["y_scale"] = new_scale
-
-                # Regenerate y-tick labels with new scales
-                self._update_y_tick_labels()
-
-                # Update shader attribute with new scales
-                self._update_shader_scales()
-
-                self.canvas.update()
-
-    def _update_shader_scales(self):
-        """Update the a_y_scale shader attribute with current channel scales."""
-        y_scales = np.array(
-            [ch["y_scale"] for ch in self.channel_info], dtype=np.float32
+        # Battery Label - Anchor top right
+        self.lbl_bat = TextVisual(
+            "--%",
+            color="yellow",
+            font_size=10,
+            bold=True,
+            anchor_x="right",
+            anchor_y="top",
         )
-        a_y_scale = np.repeat(y_scales, self.n_samples)
-        self.program["a_y_scale"] = a_y_scale
+
+    def _init_grid_lines(self):
+        limit_pts = []
+        zero_pts = []
+
+        margin_bottom = 0.05
+        h_plot = 1.0 - margin_bottom
+        margin_left = 0.12
+        margin_right = 0.05
+
+        for i in range(self.total_channels):
+            slot_h = h_plot / self.total_channels
+            y_base = margin_bottom + (i * slot_h)
+            y_center = y_base + (slot_h * 0.5)
+
+            y_top = y_center + (slot_h * 0.45)
+            y_bot = y_center - (slot_h * 0.45)
+
+            x1, x2 = margin_left, 1.0 - margin_right
+
+            zero_pts.extend([[x1, y_center], [x2, y_center]])
+            limit_pts.extend([[x1, y_top], [x2, y_top]])
+            limit_pts.extend([[x1, y_bot], [x2, y_bot]])
+
+        self.grid_limit_vbo = gloo.VertexBuffer(np.array(limit_pts, dtype=np.float32))
+        self.grid_zero_vbo = gloo.VertexBuffer(np.array(zero_pts, dtype=np.float32))
 
     def on_timer(self, event):
-        """Update data from streams."""
-        # Update each channel
-        for ch_info in self.channel_info:
-            stream_idx = ch_info["stream_idx"]
-            ch_idx = ch_info["ch_idx"]
-            stream = self.streams[stream_idx]
-            stats = self.stream_stats[stream_idx]
-
-            # Get new data from stream
-            try:
-                data, timestamps = stream.get_data(winsize=self.window_size)
-            except Exception:
-                continue
-
-            if data.shape[1] == 0:
-                continue
-
-            # Update stats
-            if len(timestamps) > 0:
-                if stats["first_timestamp"] is None:
-                    stats["first_timestamp"] = timestamps[0]
-                stats["last_timestamp"] = timestamps[-1]
-
-                time_span = stats["last_timestamp"] - stats["first_timestamp"]
-                sfreq = stream.info["sfreq"]
-                if sfreq > 0:
-                    stats["total_samples"] = int(time_span * sfreq) + 1
-                else:
-                    stats["total_samples"] = len(timestamps)
-
-            # Get this channel's data
-            channel_data = data[ch_idx, :]
-
-            # Update channel statistics buffer (used for both mean and EEG std)
-            channel_global_idx = self.channel_info.index(ch_info)
-            buffer_size = len(self.channel_stats_buffer[channel_global_idx])
-            if len(channel_data) > 0:
-                # Take last samples to fill buffer
-                samples_to_use = min(buffer_size, len(channel_data))
-                self.channel_stats_buffer[channel_global_idx] = np.roll(
-                    self.channel_stats_buffer[channel_global_idx], -samples_to_use
-                )
-                self.channel_stats_buffer[channel_global_idx][-samples_to_use:] = (
-                    channel_data[-samples_to_use:]
-                )
-
-                # Calculate running mean (for all channels)
-                y_mean = np.mean(self.channel_stats_buffer[channel_global_idx])
-                ch_info["y_mean"] = y_mean
-
-                # Calculate std for EEG channels (impedance indicator)
-                stream_name = self.streams[ch_info["stream_idx"]].name
-                if "EEG" in stream_name.upper():
-                    std_val = np.std(self.channel_stats_buffer[channel_global_idx])
-                    for eeg_ch_idx, std_text in self.eeg_std_labels:
-                        if eeg_ch_idx == channel_global_idx:
-                            std_text.text = f"σ: {std_val:.1f}"
-                            # Color-code based on impedance quality
-                            if std_val < 50:
-                                std_text.color = "green"  # Good impedance
-                            elif std_val > 100:
-                                std_text.color = "red"  # Poor impedance
-                            else:
-                                std_text.color = "yellow"  # Acceptable impedance
-                            break
-
-            # Normalize to [-1, 1] range for consistent display
-            # Center the signal around its mean, with y_range defining the vertical span
-            # Don't clip - let values go beyond limits so user knows when signal exceeds range
-            y_range = ch_info["y_range"]
-            y_mean = ch_info["y_mean"]
-
-            # Map [y_mean - y_range/2, y_mean + y_range/2] to [-1, 1]
-            normalized_data = 2.0 * (channel_data - y_mean) / y_range
-
-            # Resample to fit display buffer if needed
-            if len(normalized_data) != self.n_samples:
-                # Simple interpolation
-                x_old = np.linspace(0, 1, len(normalized_data))
-                x_new = np.linspace(0, 1, self.n_samples)
-                normalized_data = np.interp(x_new, x_old, normalized_data)
-
-            # Update data buffer for this channel
-            channel_global_idx = self.channel_info.index(ch_info)
-            self.data[:, channel_global_idx] = normalized_data
-
-        # Battery stream update
+        # 1. Battery Update
         if self.battery_stream_idx is not None:
-            bat_stream = self.streams[self.battery_stream_idx]
             try:
-                bat_data, bat_ts = bat_stream.get_data(winsize=5.0)
-                if bat_data.shape[1] > 0:
-                    latest = float(bat_data[0, -1])
-                    latest = max(0.0, min(100.0, latest))
-                    self.battery_level = latest
-                    self.battery_history.append(latest)
-            except Exception:
+                # Poll battery rarely (every 1s roughly)
+                if self.write_ptr % 50 == 0:
+                    bat_data, _ = self.streams[self.battery_stream_idx].get_data(
+                        winsize=1.0
+                    )
+                    if bat_data.size > 0:
+                        self.battery_level = float(bat_data[0, -1])
+            except:
                 pass
 
-        # Update vertex positions
-        self.program["a_position"].set_data(self.data.T.ravel().astype(np.float32))
+        # 2. Signal Update (Master Clock Logic)
+        master_stream = self.streams[self.master_stream_idx]
+        try:
+            chunk_m, ts_m = master_stream.get_data(winsize=0.5)
+        except:
+            return
 
-        # Update y-tick labels to reflect new means (only update text, don't recreate)
-        self._update_y_tick_labels(create_new=False)
+        if len(ts_m) == 0:
+            return
 
+        last_t = self.last_timestamps[self.master_stream_idx]
+        new_mask = ts_m > last_t
+        if not np.any(new_mask):
+            return
+
+        data_new_m = chunk_m[:, new_mask]
+        ts_new_m = ts_m[new_mask]
+        self.last_timestamps[self.master_stream_idx] = ts_new_m[-1]
+
+        n_slots_to_fill = data_new_m.shape[1]
+        batch_update = np.zeros(
+            (n_slots_to_fill, self.total_channels), dtype=np.float32
+        )
+
+        for s_idx, stream in enumerate(self.streams):
+            if s_idx == self.battery_stream_idx:
+                continue
+
+            if s_idx == self.master_stream_idx:
+                raw_data = data_new_m.T
+            else:
+                try:
+                    chunk_s, ts_s = stream.get_data(winsize=0.5)
+                except:
+                    continue
+
+                if len(ts_s) == 0:
+                    raw_data = np.zeros((n_slots_to_fill, chunk_s.shape[0]))
+                else:
+                    last_t_s = self.last_timestamps[s_idx]
+                    mask_s = ts_s > last_t_s
+                    if np.any(mask_s):
+                        d_s = chunk_s[:, mask_s]
+                        self.last_timestamps[s_idx] = ts_s[mask_s][-1]
+                        # Interpolate
+                        x_old = np.linspace(0, 1, d_s.shape[1])
+                        x_new = np.linspace(0, 1, n_slots_to_fill)
+                        raw_data = np.zeros((n_slots_to_fill, d_s.shape[0]))
+                        for i in range(d_s.shape[0]):
+                            raw_data[:, i] = np.interp(x_new, x_old, d_s[i, :])
+                    else:
+                        raw_data = np.zeros((n_slots_to_fill, chunk_s.shape[0]))
+
+            # Process Channels
+            relevant_chs = [c for c in self.channel_info if c["stream_idx"] == s_idx]
+            for ch_info in relevant_chs:
+                signal = raw_data[:, ch_info["ch_idx"]]
+
+                # DC Offset Removal (EMA)
+                alpha = 0.005
+                for val in signal:
+                    ch_info["dc_offset"] = (1.0 - alpha) * ch_info[
+                        "dc_offset"
+                    ] + alpha * val
+
+                centered = signal - ch_info["dc_offset"]
+
+                # Quality
+                if ch_info["is_eeg"]:
+                    ch_info["quality_buf"].extend(centered)
+                    if len(ch_info["quality_buf"]) > 256:
+                        ch_info["quality_buf"] = ch_info["quality_buf"][-256:]
+
+                # Normalize to range
+                normalized = 2.0 * (centered / ch_info["range"])
+                batch_update[:, ch_info["data_idx"]] = normalized
+
+        # 3. Write to Buffer
+        idx_start = self.write_ptr
+        idx_end = self.write_ptr + n_slots_to_fill
+
+        if idx_end <= self.n_samples:
+            self.data_buffer[idx_start:idx_end, :] = batch_update
+        else:
+            part1 = self.n_samples - idx_start
+            part2 = n_slots_to_fill - part1
+            self.data_buffer[idx_start:, :] = batch_update[:part1]
+            self.data_buffer[:part2, :] = batch_update[part1:]
+
+        self.write_ptr = (self.write_ptr + n_slots_to_fill) % self.n_samples
+        self.vbo_pos.set_data(self.data_buffer.T.ravel().astype(np.float32))
+        self.program["u_offset"] = float(self.write_ptr)
+
+        self._update_ui_labels()
         self.canvas.update()
 
-        # Check duration limit
-        if (
-            self.duration is not None
-            and (time.time() - self.start_time) >= self.duration
-        ):
-            self.canvas.close()
+    def _update_ui_labels(self):
+        if self.write_ptr % 10 != 0:
+            return
+
+        w, h = self.canvas.size
+        margin_bottom = 0.05
+        h_plot = 1.0 - margin_bottom
+
+        # Update Battery Label Text
+        if self.battery_level is not None:
+            self.lbl_bat.text = f"{self.battery_level:.0f}%"
+            if self.battery_level > 50:
+                self.lbl_bat.color = "lime"
+            elif self.battery_level > 20:
+                self.lbl_bat.color = "yellow"
+            else:
+                self.lbl_bat.color = "red"
+
+        for ch in self.channel_info:
+            # Channel slot geometry in pixels
+            y_rel_bot = margin_bottom + (ch["data_idx"] / self.total_channels) * h_plot
+            slot_h_rel = h_plot / self.total_channels
+            y_rel_center = y_rel_bot + slot_h_rel * 0.5
+
+            # Convert to Vispy coordinates (origin top-left)
+            y_px_center = h * (1.0 - y_rel_center)
+
+            # Name
+            self.lbl_names[ch["data_idx"]].pos = (w * 0.11, y_px_center)
+
+            # Quality
+            lbl_q = self.lbl_qual[ch["data_idx"]]
+            lbl_q.pos = (w * 0.96, y_px_center)
+            if ch["is_eeg"] and len(ch["quality_buf"]) > 50:
+                imp = np.std(ch["quality_buf"])
+                lbl_q.text = f"σ:{imp:.0f}"
+                lbl_q.color = (
+                    (0, 1, 0, 1)
+                    if imp < 50
+                    else (1, 1, 0, 1) if imp < 100 else (1, 0, 0, 1)
+                )
+            else:
+                lbl_q.text = ""
+
+            # Ticks
+            val_top = ch["range"] / 2.0
+            val_bot = -ch["range"] / 2.0
+
+            y_px_top = h * (1.0 - (y_rel_center + (slot_h_rel * 0.45)))
+            y_px_bot = h * (1.0 - (y_rel_center - (slot_h_rel * 0.45)))
+
+            ticks = self.lbl_ticks[ch["data_idx"]]
+            ticks[0].text = f"{val_top:.0f}" if abs(val_top) >= 10 else f"{val_top:.1f}"
+            ticks[0].pos = (w * 0.115, y_px_top)
+            ticks[1].text = "0"
+            ticks[1].pos = (w * 0.115, y_px_center)
+            ticks[2].text = f"{val_bot:.0f}" if abs(val_bot) >= 10 else f"{val_bot:.1f}"
+            ticks[2].pos = (w * 0.115, y_px_bot)
+
+    def on_draw(self, event):
+        gloo.clear(color=(0.1, 0.1, 0.1, 1.0))
+
+        # 1. Grid
+        self.prog_grid["color"] = (0.25, 0.25, 0.25, 1.0)
+        self.prog_grid["pos"] = self.grid_limit_vbo
+        self.prog_grid.draw("lines")
+
+        self.prog_grid["color"] = (0.35, 0.35, 0.35, 1.0)
+        self.prog_grid["pos"] = self.grid_zero_vbo
+        self.prog_grid.draw("lines")
+
+        # 2. Signals
+        # We use GL_LINES with our custom IndexBuffer to prevent connections between channels
+        self.program.draw("lines", indices=self.index_buffer)
+
+        # 3. Text Labels
+        for t in self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]:
+            t.draw()
+        for group in self.lbl_ticks:
+            for t in group:
+                t.draw()
+
+    def on_resize(self, event):
+        w, h = event.size
+        gloo.set_viewport(0, 0, w, h)
+
+        # Update text transforms
+        all_labels = self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]
+        for group in self.lbl_ticks:
+            all_labels.extend(group)
+
+        for t in all_labels:
+            t.transforms.configure(canvas=self.canvas, viewport=(0, 0, w, h))
+
+        # Position Time Axis
+        for i, t in enumerate(self.lbl_time):
+            x = w * (0.12 + (i / 5) * (0.83))
+            t.pos = (x, h - 5)
+
+        # Position Battery Text (Top Right)
+        # Margin from edges
+        margin_x = 20
+        margin_y = 20
+        self.lbl_bat.pos = (w - margin_x, margin_y)
+
+    def on_mouse_wheel(self, event):
+        delta = event.delta[1] if hasattr(event.delta, "__getitem__") else event.delta
+        scale = 1.1 if delta > 0 else 0.9
+
+        y_mouse = event.pos[1]
+        h = self.canvas.size[1]
+        y_norm = 1.0 - (y_mouse / h)
+
+        margin = 0.05
+        h_usable = 1.0 - margin
+        ch_idx = int(((y_norm - margin) / h_usable) * self.total_channels)
+
+        if 0 <= ch_idx < self.total_channels:
+            target = self.channel_info[ch_idx]
+            grp = (
+                "EEG"
+                if target["is_eeg"]
+                else (
+                    "ACC"
+                    if "ACC" in target["name"]
+                    else "GYRO" if "GYRO" in target["name"] else "OPT"
+                )
+            )
+
+            for ch in self.channel_info:
+                curr_grp = (
+                    "EEG"
+                    if ch["is_eeg"]
+                    else (
+                        "ACC"
+                        if "ACC" in ch["name"]
+                        else "GYRO" if "GYRO" in ch["name"] else "OPT"
+                    )
+                )
+
+                if curr_grp == grp:
+                    ch["range"] /= scale
 
     def show(self):
         """Show the canvas and start the event loop."""
@@ -1083,107 +552,41 @@ class RealtimeViewer:
             self.timer.stop()
             for stream in self.streams:
                 stream.disconnect()
-
             if self.verbose:
-                elapsed = time.time() - self.start_time
-                print(f"\nVisualization stopped.")
-                print(f"  Duration: {elapsed:.1f} seconds")
-                for stream_idx, stream in enumerate(self.streams):
-                    stats = self.stream_stats[stream_idx]
-                    print(f"  {stream.name}: {stats['total_samples']} samples")
+                print("Viewer closed.")
 
-                    if (
-                        stats["first_timestamp"] is not None
-                        and stats["last_timestamp"] is not None
-                    ):
-                        time_span = stats["last_timestamp"] - stats["first_timestamp"]
-                        if time_span > 0 and stats["total_samples"] > 0:
-                            avg_rate = (stats["total_samples"] - 1) / time_span
-                            print(
-                                f"    Mean rate: {avg_rate:.1f} Hz (expected: {stream.info['sfreq']} Hz)"
-                            )
-        try:
-            app.run()
-        except KeyboardInterrupt:
-            pass
 
-def view(
-    stream_name: Optional[str] = None,
-    duration: Optional[float] = None,
-    window_size: float = 10.0,
-    update_interval: float = 0.005,
-    verbose: bool = True,
-) -> None:
-    """
-    Visualize EEG and/or ACC/GYRO data from LSL streams in real-time using GLOO (OpenGL).
-
-    This uses direct OpenGL rendering via GLOO for maximum performance with many channels.
-    Optimized for 20+ channels (EEG + Motion + Optics).
-
-    By default, displays ALL available Muse streams (EEG + ACCGYRO + Optics if available).
-
-    Supported streams:
-    - Muse_EEG: 4 EEG channels (TP9, AF7, AF8, TP10) at 256 Hz
-    - Muse_ACCGYRO: 6 motion channels (ACC_X/Y/Z, GYRO_X/Y/Z) at 52 Hz
-    - Muse_OPTICS: Up to 16 optical channels at 64 Hz
-
-    Parameters:
-    - stream_name: Name of specific LSL stream to connect to (default: None = show all available)
-    - duration: Optional viewing duration in seconds. Omit to view until window closed.
-    - window_size: Time window to display in seconds (default: 10.0)
-    - update_interval: Update interval in seconds (default: 0.005 = 200 Hz)
-    - verbose: Print progress messages
-    """
-    # Configure LSL to reduce verbosity (disables IPv6 warnings and lowers log level)
+def view(stream_name=None, window_duration=10.0, **kwargs):
     configure_lsl_api_cfg()
-
     from mne_lsl.stream import StreamLSL
 
-    # If no stream specified, try to connect to all available Muse streams
+    print("Connecting to Streams...")
     streams = []
-    if stream_name is None:
-        # Try all possible Muse streams
-        for name in ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS", "Muse_BATTERY"]:
-            if verbose:
-                print(f"Looking for LSL stream '{name}'...")
-            try:
-                bufsize = window_size if name != "Muse_BATTERY" else 120.0
-                stream = StreamLSL(bufsize=window_size, name=name)
-                stream.connect(timeout=2.0)
-                streams.append(stream)
-                if verbose:
-                    print(f"  ✓ Connected to {name}")
-            except Exception:
-                if verbose:
-                    print(f"  ✗ {name} not found")
 
-        if len(streams) == 0:
-            print("\nError: No Muse streams found!")
-            print("Make sure streaming is running in another terminal:")
-            print("  OpenMuse stream --address <MAC>")
-            return
-    else:
-        # Connect to specific stream
-        if verbose:
-            print(f"Looking for LSL stream '{stream_name}'...")
+    # Auto-detect including battery
+    targets = ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS", "Muse_BATTERY"]
+    if stream_name:
+        targets = [stream_name]
+
+    for name in targets:
         try:
-            stream = StreamLSL(bufsize=window_size, name=stream_name)
-            stream.connect(timeout=5.0)
-            streams.append(stream)
-            if verbose:
-                print(f"  ✓ Connected to {stream_name}")
-        except Exception as exc:
-            print(f"Error: Could not connect to LSL stream '{stream_name}': {exc}")
-            print("\nMake sure the stream is running in another terminal:")
-            print("  OpenMuse stream --address <MAC> --preset <PRESET>")
-            return
+            bufsize = window_duration if "BATTERY" not in name else 5.0
+            s = StreamLSL(bufsize=bufsize, name=name)
+            s.connect(timeout=1.5)
+            streams.append(s)
+            print(f"  + Connected: {name}")
+        except:
+            pass
 
-    # Create and show viewer
-    viewer = RealtimeViewer(
-        streams=streams,
-        window_size=window_size,
-        update_interval=update_interval,
-        duration=duration,
-        verbose=verbose,
-    )
-    viewer.show()
+    if not streams:
+        print("Error: No streams found. Is 'openmuse-stream' running?")
+        return
+
+    # Instantiate viewer
+    v = RealtimeViewer(streams, window_duration=window_duration, **kwargs)
+    v.show()
+
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        pass
