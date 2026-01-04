@@ -11,9 +11,6 @@
 - **Viewer**: Updated `view` and `view_bitalino` to support fuzzy matching for stream names.
 - **Dependencies**: Replaced `pylsl` with `mne_lsl` for stream resolution.
 
-### Fixed
-- **Streaming**: Fixed `ValueError` and LSL push errors on newer Muse devices that interleave packets with different channel counts (e.g., 4ch vs 16ch OPTICS). The streamer now dynamically creates separate LSL streams for each channel configuration (e.g., `Muse-OPTICS-16` and `Muse-OPTICS-4`).
-
 
 
 ## [0.1.2]

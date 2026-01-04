@@ -205,7 +205,7 @@ def create_stream_outlet(
         ch_names = select_eeg_channels(n_channels)
         sfreq = 256.0
         stype = "EEG"
-        source_id = f"{device_id}_eeg_{n_channels}"
+        source_id = f"{device_id}_eeg"
     elif sensor_type == "ACCGYRO":
         ch_names = list(ACCGYRO_CHANNELS)
         sfreq = 52.0
@@ -215,7 +215,7 @@ def create_stream_outlet(
         ch_names = select_optics_channels(n_channels)
         sfreq = 64.0
         stype = "PPG"
-        source_id = f"{device_id}_optics_{n_channels}"
+        source_id = f"{device_id}_optics"
     elif sensor_type == "BATTERY":
         ch_names = list(BATTERY_CHANNELS)
         sfreq = 1.0
@@ -224,14 +224,8 @@ def create_stream_outlet(
     else:
         raise ValueError(f"Unknown sensor type: {sensor_type}")
 
-    # Append channel count to name for variable sensors to distinguish streams
-    if sensor_type in ["EEG", "OPTICS"]:
-        stream_name = f"Muse-{sensor_type}-{n_channels} ({device_id})"
-    else:
-        stream_name = f"Muse-{sensor_type} ({device_id})"
-
     info = StreamInfo(
-        name=stream_name,
+        name=f"Muse-{sensor_type} ({device_id})",
         stype=stype,
         n_channels=len(ch_names),
         sfreq=sfreq,
@@ -261,22 +255,19 @@ async def _stream_async(
     """Asynchronous context for BLE connection and LSL streaming."""
 
     # --- Stream State ---
-    # Key is (sensor_type, n_channels)
-    streams: Dict[Tuple[str, int], SensorStream] = {}
+    streams: Dict[str, SensorStream] = {}
     last_flush_time = 0.0
     samples_sent = {"EEG": 0, "ACCGYRO": 0, "OPTICS": 0, "BATTERY": 0}
     start_time = 0.0
 
-    def _queue_samples(
-        stream_key: Tuple[str, int], data_array: np.ndarray, lsl_now: float
-    ):
+    def _queue_samples(sensor_type: str, data_array: np.ndarray, lsl_now: float):
         """
         Map timestamps and buffer samples.
         """
-        if data_array.size == 0 or data_array.ndim != 2 or data_array.shape[1] < 1:
+        if data_array.size == 0 or data_array.ndim != 2 or data_array.shape[1] < 2:
             return
 
-        stream = streams.get(stream_key)
+        stream = streams.get(sensor_type)
         if stream is None:
             return
 
@@ -312,7 +303,7 @@ async def _stream_async(
         nonlocal last_flush_time, samples_sent  # noqa: F824
         last_flush_time = time.monotonic()
 
-        for (sensor_type, n_channels), stream in streams.items():
+        for sensor_type, stream in streams.items():
             if not stream.buffer:
                 continue
 
@@ -337,13 +328,10 @@ async def _stream_async(
                         timestamp=sorted_timestamps.astype(np.float64, copy=False),
                         pushThrough=True,
                     )
-                if sensor_type in samples_sent:
-                    samples_sent[sensor_type] += len(sorted_data)
+                samples_sent[sensor_type] += len(sorted_data)
             except Exception as e:
                 if verbose:
-                    print(
-                        f"Error pushing LSL chunk for {sensor_type} ({n_channels}ch): {e}"
-                    )
+                    print(f"Error pushing LSL chunk for {sensor_type}: {e}")
 
     def _on_data(sender, data: bytearray):
         """Main data callback from Bleak."""
@@ -358,39 +346,20 @@ async def _stream_async(
                 pass
 
         subpackets = parse_message(message)
-
-        # Group subpackets by (sensor_type, n_channels)
-        grouped_packets: Dict[Tuple[str, int], List[Dict]] = {}
-
-        for sensor_type, pkt_list in subpackets.items():
-            for pkt in pkt_list:
-                if "data" not in pkt:
-                    continue
-
-                # Determine n_channels
-                data_arr = pkt["data"]
-                if data_arr.ndim == 1:
-                    n_channels = 1
-                else:
-                    n_channels = data_arr.shape[1]
-
-                key = (sensor_type, n_channels)
-                if key not in grouped_packets:
-                    grouped_packets[key] = []
-                grouped_packets[key].append(pkt)
+        decoded: Dict[str, np.ndarray] = {}
 
         # Ensure streams exist
-        for (sensor_type, n_channels), pkt_list in grouped_packets.items():
-            if (sensor_type, n_channels) not in streams:
-                streams[(sensor_type, n_channels)] = create_stream_outlet(
-                    sensor_type, n_channels, client.name, address, clock_model
-                )
-
-        decoded: Dict[Tuple[str, int], np.ndarray] = {}
+        for sensor_type, pkt_list in subpackets.items():
+            if pkt_list and sensor_type not in streams:
+                n_channels = pkt_list[0].get("n_channels")
+                if n_channels:
+                    streams[sensor_type] = create_stream_outlet(
+                        sensor_type, n_channels, client.name, address, clock_model
+                    )
 
         # Decode & Make Timestamps (Relative Device Time)
-        for (sensor_type, n_channels), pkt_list in grouped_packets.items():
-            stream = streams.get((sensor_type, n_channels))
+        for sensor_type, pkt_list in subpackets.items():
+            stream = streams.get(sensor_type)
             if stream:
                 current_state = (
                     stream.base_time,
@@ -401,7 +370,7 @@ async def _stream_async(
                 array, base_time, wrap_offset, last_abs_tick, sample_counter = (
                     make_timestamps(pkt_list, *current_state)
                 )
-                decoded[(sensor_type, n_channels)] = array
+                decoded[sensor_type] = array
 
                 # Update state
                 stream.base_time = base_time
@@ -413,9 +382,10 @@ async def _stream_async(
         lsl_now = local_clock()
 
         # Queue samples
-        for (sensor_type, n_channels), sensor_data in decoded.items():
+        for sensor_type in ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]:
+            sensor_data = decoded.get(sensor_type, np.empty((0, 0)))
             if sensor_data.size > 0:
-                _queue_samples((sensor_type, n_channels), sensor_data, lsl_now)
+                _queue_samples(sensor_type, sensor_data, lsl_now)
 
         # Flush trigger
         should_flush = (time.monotonic() - last_flush_time > FLUSH_INTERVAL) or any(
