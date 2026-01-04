@@ -9,17 +9,13 @@ import pandas as pd
 import pyxdf
 import scipy.signal
 
-
 # --- Configuration ---
-filename = "./validate_synchronization3.xdf"
+filename = "./validate_synchronization6_WindowedClock.xdf"
+# filename = "./validate_synchronization7_WindowedClock.xdf"
+# filename = "./validate_synchronization8_RobustClock.xdf"
+# filename = "./validate_synchronization9_StableClockNew.xdf"
+# filename = "./validate_synchronization10_AdaptiveClock.xdf"
 dejitter_timestamps = ["OpenSignals"]
-# select_streams = [
-#     {"name": "Muse_ACCGYRO"},
-#     {"name": "Muse_OPTICS"},
-#     {"name": "Muse_EEG"},
-#     {"name": "OpenSignals"},
-# ]
-
 
 
 # --- Load Data ---
@@ -71,13 +67,14 @@ for i, stream in enumerate(streams):
 
 
 # --- Plot streams ---
-xmin = tmin + 4
+xmin = tmin + 6
 fig = plt.figure(figsize=(15, 7))
 for i, s in enumerate(streams):
     name = s["info"].get("name", ["Unnamed"])[0]
     channels = [d["label"][0] for d in s["info"]["desc"][0]["channels"][0]["channel"]]
     if name in ["OpenSignals"]:
-        lux = s["time_series"][:, channels.index("LUX0")]
+        lux_name = [ch for ch in channels if "LUX" in ch][0]
+        lux = s["time_series"][:, channels.index(lux_name)]
         lux = (lux - np.min(lux)) / (np.max(lux) - np.min(lux))
         lux_ts = s["time_stamps"]
         mask = (lux_ts >= xmin) & (lux_ts <= xmin + 5)
@@ -141,6 +138,7 @@ np.median(diff_opticsmarkers)
 
 
 # plt.plot((onsets_lux - min(onsets_lux)) / 60, diff_luxoptics)
+plt.axhline(0, color="black", linestyle="--")
 plt.plot(
     (onsets_lux[mask_luxoptics] - min(onsets_lux)) / 60,
     diff_luxoptics[mask_luxoptics],
@@ -156,68 +154,21 @@ plt.plot(
     diff_opticsmarkers[mask_opticsmarkers],
     label="OPTICS - MARKERS",
 )
-plt.title("LUX - OPTICS event onsets differences")
+plt.title(f"Device event onsets differences (WindowedClock)")
 plt.xlabel("Time")
 plt.ylabel("Difference (s)")
+plt.ylim(-0.2, 0.2)
 plt.legend()
+
 
 # _ = plt.hist(diff, alpha=0.5, bins=200)
 
-# # --- Investigate why synchronization did not happen ---
-# for stream in streams:
-#     # Info contained in streams
-#     name = stream["info"].get("name", ["Unnamed"])[0]
-#     print(f"==========\nStream: {name}")
-#     # stream.keys() # ['info', 'footer', 'time_series', 'time_stamps', 'clock_times', 'clock_values']
-#     # stream["footer"]["info"].keys()  # ['first_timestamp', 'last_timestamp', 'sample_count", "clock_offsets"]
-#     # stream["info"].keys()  # ['name', 'type', 'channel_count', 'channel_format', 'source_id', 'nominal_srate', 'version', 'created_at', 'uid', 'session_id', 'hostname', 'v4address', 'v4data_port', 'v4service_port', 'v6address', 'v6data_port', 'v6service_port', 'desc', 'stream_id', 'effective_srate', 'segments', 'clock_segments']
-#     print(f"N of clock samples: {len(stream['clock_times'])}")
-#     print(stream["clock_times"][0:2])
-#     print(f"N of clock values: {len(stream['clock_values'])}")
-#     print(stream["clock_values"][0:2])
-#     print(len(stream["footer"]["info"]["clock_offsets"]))
-#     print(f"Clock offsets:")
-#     print(stream["footer"]["info"]["clock_offsets"][0]["offset"][0:2])
 
-# # --- Manual Synchronization Loop ---
-
-# print("\n--- Starting Manual Clock Synchronization ---")
-# for i, stream in enumerate(streams):
-#     name = stream["info"].get("name", ["Unnamed"])[0]
-
-#     # 1. Get the clock correction data
-#     # host_times are the LSL local_clock() time (our common reference)
-#     host_times = stream["clock_times"]
-
-#     # offsets = device_time - host_time
-#     offsets = stream["clock_values"]
-
-#     # We need at least 2 points to fit a line
-#     if len(host_times) < 2:
-#         print(f"Stream {name}: Not enough clock samples to fit model. Skipping.")
-#         continue
-
-#     # 2. Fit a linear model (y = mx + b)
-#     # y = offsets
-#     # x = host_times
-#     # This model predicts: offset = m * host_time + b
-#     m, b = np.polyfit(host_times, offsets, 1)
-
-#     # 3. Get the original, un-synchronized device timestamps
-#     device_timestamps = stream["time_stamps"]
-
-#     # 4. Solve for host_time and apply the transformation
-#     # We know: offset = device_time - host_time
-#     # We modeled: offset = m * host_time + b
-#     # Therefore: device_time - host_time = m * host_time + b
-#     # Rearrange to solve for host_time:
-#     # device_time - b = m * host_time + host_time
-#     # device_time - b = (m + 1) * host_time
-#     # host_time = (device_time - b) / (m + 1)
-
-#     host_timestamps = (device_timestamps - b) / (m + 1)
-
-#     # 5. Replace the stream's timestamps with the new synchronized timestamps
-#     streams[i]["time_stamps"] = host_timestamps
-
-#     print(f"Stream {name}: Synchronization applied (m={m:.2e}, b={b:.2f})")
+# Plot scatter plot
+plt.figure(figsize=(10, 10))
+plt.scatter(
+    diff_luxoptics[mask_luxmarkers],
+    diff_luxmarkers[mask_luxmarkers],
+    label="Correlation",
+    alpha=0.5,
+)

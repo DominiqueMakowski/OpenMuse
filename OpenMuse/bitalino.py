@@ -11,7 +11,7 @@ This module connects to a BITalino device via Bluetooth/Serial and streams
 data over LSL (Lab Streaming Layer) with high-precision timestamping.
 The code is inspired by https://github.com/BITalinoWorld/revolution-python-api
 
-It utilizes the StableClock RLS filter (identical to the Muse implementation)
+It utilizes the ConstrainedRLSClock filter (identical to the Muse implementation)
 to map device sample counts to LSL time, correcting for clock drift.
 """
 
@@ -25,7 +25,7 @@ from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 from mne_lsl.stream import StreamLSL
 
 from .backends import BleakBackend
-from .stream import StableClock
+from .clocks import ConstrainedRLSClock
 from .utils import configure_lsl_api_cfg
 from .view import FastViewer
 
@@ -57,7 +57,9 @@ def find_bitalino(timeout=10, verbose=True):
             for b in bitalinos:
                 print(f'Found device {b["name"]}, MAC Address {b["address"]}')
         else:
-            print("No BITalinos found. Ensure the device is on and Bluetooth is enabled.")
+            print(
+                "No BITalinos found. Ensure the device is on and Bluetooth is enabled."
+            )
 
     return bitalinos
 
@@ -154,7 +156,9 @@ class BITalino:
 
     async def connect(self, timeout: float = 10.0):
         """Connects to the device and subscribes to the data stream."""
-        device = await BleakScanner.find_device_by_address(self.address, timeout=timeout)
+        device = await BleakScanner.find_device_by_address(
+            self.address, timeout=timeout
+        )
         if not device:
             raise Exception(f"Device {self.address} not found.")
 
@@ -169,7 +173,9 @@ class BITalino:
         if self.client:
             await self.client.disconnect()
 
-    async def start(self, sampling_rate: int = 1000, channels: List[int] = [0, 1, 2, 3, 4, 5]):
+    async def start(
+        self, sampling_rate: int = 1000, channels: List[int] = [0, 1, 2, 3, 4, 5]
+    ):
         """
         Configures sampling rate and starts acquisition.
         Supported rates: 1, 10, 100, 1000 Hz.
@@ -288,7 +294,9 @@ async def stream_bitalino(
     # 1. Validate Sensor Types
     if channels:
         if len(channels) != 6:
-            raise ValueError("Length of 'channels' must be 6. Include 'None' for unused.")
+            raise ValueError(
+                "Length of 'channels' must be 6. Include 'None' for unused."
+            )
     else:
         # Fill with "RAW" if not provided to activate all
         channels = ["RAW"] * 6
@@ -339,11 +347,14 @@ async def stream_bitalino(
         ch.append_child_value("type", "EEG" if "EEG" in name else "Biosignals")
 
     outlet = StreamOutlet(info)
-    print(f"LSL Stream '{info.name}' created. Channels: {channel_names}. " f"Active Device indices: {active_channels}")
+    print(
+        f"LSL Stream '{info.name}' created. Channels: {channel_names}. "
+        f"Active Device indices: {active_channels}"
+    )
 
     # 2. State Management
     device = BITalino(address)
-    clock = StableClock()
+    clock = ConstrainedRLSClock()
 
     # Buffering state
     sample_buffer = []
@@ -395,7 +406,7 @@ async def stream_bitalino(
 
                 current_raw_col += 1
 
-            # --- Timestamping (StableClock) ---
+            # --- Timestamping (ConstrainedRLSClock) ---
             # 1. Device time is purely sample count / Rate
             device_time_end = total_samples / sampling_rate
 
@@ -403,7 +414,9 @@ async def stream_bitalino(
             clock.update(device_time_end, lsl_now)
 
             # 3. Retroactively calculate timestamps for the whole chunk
-            chunk_device_times = device_time_end - (np.arange(n_chunk)[::-1] / sampling_rate)
+            chunk_device_times = device_time_end - (
+                np.arange(n_chunk)[::-1] / sampling_rate
+            )
 
             # 4. Map to LSL time
             lsl_timestamps = clock.map_time(chunk_device_times)
