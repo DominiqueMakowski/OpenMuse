@@ -276,6 +276,7 @@ async def _stream_async(
         if data_array.size == 0 or data_array.ndim != 2 or data_array.shape[1] < 1:
             return
 
+        sensor_type, n_channels = stream_key
         stream = streams.get(stream_key)
         if stream is None:
             return
