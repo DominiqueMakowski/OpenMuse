@@ -27,7 +27,7 @@ from mne_lsl.stream import StreamLSL
 from .backends import BleakBackend
 from .clocks import ConstrainedRLSClock
 from .utils import configure_lsl_api_cfg
-from .view import FastViewer
+from .view import RealtimeViewer
 
 
 # ============================================================================
@@ -455,9 +455,9 @@ async def stream_bitalino(
 # ============================================================================
 # BITALINO VIEWER
 # ============================================================================
-class BitalinoViewer(FastViewer):
+class BitalinoViewer(RealtimeViewer):
     """
-    Subclass of FastViewer adapted for BITalino.
+    Subclass of RealtimeViewer adapted for BITalino.
     Overrides channel setup to filter for Analog (A1-A6) channels
     and sets appropriate 10-bit ranges.
     """

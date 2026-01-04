@@ -283,6 +283,13 @@ async def _stream_async(
         if last_device_time > stream.last_update_device_time:
             stream.clock.update(last_device_time, lsl_now)
             stream.last_update_device_time = last_device_time
+        else:
+            # Log when clock updates are skipped (helps debug out-of-order packet timing issues)
+            if verbose:
+                print(
+                    f"[{sensor_type}] Skipping clock update for non-monotonic device time: "
+                    f"{last_device_time} <= {stream.last_update_device_time}"
+                )
 
         # --- Map Timestamps ---
         # Transform the entire chunk using the current stable model
