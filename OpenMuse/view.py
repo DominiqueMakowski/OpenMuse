@@ -572,14 +572,14 @@ def view(stream_name=None, window_duration=10.0, **kwargs):
     if stream_name:
         # If a specific name is requested, try to find it exactly or as a substring
         for info in infos:
-            if stream_name == info.name():
-                found_names.append(info.name())
+            if stream_name == info.name:
+                found_names.append(info.name)
 
         # If not found exactly, try substring match
         if not found_names:
             for info in infos:
-                if stream_name in info.name():
-                    found_names.append(info.name())
+                if stream_name in info.name:
+                    found_names.append(info.name)
 
         # If still not found, maybe the user provided the full name but resolve_streams missed it (rare)
         if not found_names:
@@ -588,7 +588,7 @@ def view(stream_name=None, window_duration=10.0, **kwargs):
     else:
         # Auto-detect Muse streams (format: Muse-TYPE (DEVICE_ID))
         for info in infos:
-            n = info.name()
+            n = info.name
             if "Muse" in n:
                 if any(t in n for t in ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]):
                     found_names.append(n)

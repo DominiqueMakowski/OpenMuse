@@ -536,15 +536,15 @@ def view_bitalino(stream_name="BITalino", window_duration=10.0):
 
     # 1. Exact match
     for info in infos:
-        if info.name() == stream_name:
-            target_name = info.name()
+        if info.name == stream_name:
+            target_name = info.name
             break
 
     # 2. Substring match (if default "BITalino" is used, it matches "BITalino-AA:BB...")
     if not target_name:
         for info in infos:
-            if stream_name in info.name():
-                target_name = info.name()
+            if stream_name in info.name:
+                target_name = info.name
                 break
 
     if target_name:

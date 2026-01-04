@@ -148,7 +148,8 @@ class TestGlobalTimestamping(unittest.TestCase):
     def test_sensors_config(self):
         """Test that SENSORS configuration is complete."""
         # Should have all expected sensor TAG bytes
-        expected_tags = {0x11, 0x12, 0x34, 0x35, 0x36, 0x47, 0x53, 0x98}
+        # 0x88 is a new firmware combined/metadata packet (structure TBD)
+        expected_tags = {0x11, 0x12, 0x34, 0x35, 0x36, 0x47, 0x53, 0x88, 0x98}
         self.assertEqual(set(SENSORS.keys()), expected_tags)
 
         # Each sensor should have required fields
