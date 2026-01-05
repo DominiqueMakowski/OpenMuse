@@ -104,15 +104,17 @@ SENSORS = {
         "rate": 0.0,
         "data_len": 24,
     },
-    # 0x88: New firmware combined/metadata packet - structure TBD
-    # Contains 196 bytes of data, appears to bundle multiple sensor types
-    # For now, mark as Unknown to allow parsing to continue without errors
+    # 0x88: New firmware battery/status packet
+    # Contains battery percentage in first 2 bytes, plus additional unknown data
+    # Battery is extracted from this packet for new firmware (replaces 0x98)
+    # NOTE: data_len is set to minimum observed (196 bytes) but actual packets
+    # vary from 188-230 bytes. The decoder only reads first 2 bytes for battery.
     0x88: {
-        "type": "Unknown",
-        "n_channels": 0,
-        "n_samples": 0,
-        "rate": 0.0,
-        "data_len": 196,  # 196 used as placeholder; actual packets vary 188-230 bytes
+        "type": "BATTERY",
+        "n_channels": 1,
+        "n_samples": 1,
+        "rate": 0.2,  # ~1 packet every 5-6 seconds (variable)
+        "data_len": 188,  # Minimum observed; actual packets vary 188-230 bytes
     },
     0x98: {
         "type": "BATTERY",
@@ -521,6 +523,10 @@ def _decode_accgyro_data(data_bytes: bytes) -> Optional[np.ndarray]:
 def _decode_battery_data(data_bytes: bytes) -> Optional[np.ndarray]:
     """
     Decode Battery data (first 2 bytes = SOC).
+
+    Works for both:
+    - 0x98 packets (old firmware): ~20 bytes, battery in first 2 bytes
+    - 0x88 packets (new firmware): 188-230 bytes, battery in first 2 bytes
 
     Returns: np.ndarray shape (1,) with battery percentage
     """

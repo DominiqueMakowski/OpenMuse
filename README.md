@@ -94,7 +94,7 @@ The following options are available:
 - `--preset`: Preset configuration (default: `p1041` for all channels)
 - `--outfile`: Optional JSON file to save the streamed data
 
-
+### Visualize Live Streams
 
 To visualize live LSL streams, open a new terminal (while the streaming is running) and run:
 
@@ -102,11 +102,33 @@ To visualize live LSL streams, open a new terminal (while the streaming is runni
 OpenMuse view
 ```
 
-If you have multiple Muse devices streaming, you can filter by MAC address:
+### Hyperscanning (Multiple Devices)
 
-```powershell
-OpenMuse view --address <your-muse-address>
-```
+To record from multiple Muse devices simultaneously (e.g., for hyperscanning studies):
+
+1. **Discover devices**: Power on all Muse headbands and run `OpenMuse find` to note down each device's MAC address.
+
+2. **Start streaming**: Open a **separate terminal for each device** and run the stream command with each MAC address:
+
+   ```powershell
+   # Terminal 1
+   OpenMuse stream --address 00:55:DA:B9:FA:20
+   
+   # Terminal 2
+   OpenMuse stream --address 00:55:DA:BB:CD:CD
+   ```
+
+3. **Visualize (optional)**: Open additional terminals to view each device's streams:
+
+   ```powershell
+   # View first device
+   OpenMuse view --address 00:55:DA:B9:FA:20
+   
+   # View second device
+   OpenMuse view --address 00:55:DA:BB:CD:CD
+   ```
+
+4. **Record with LabRecorder**: Use [LabRecorder](https://github.com/labstreaminglayer/App-LabRecorder) to record all streams to an XDF file. Select all the streams from your devices (e.g., `Muse-EEG (00:55:DA:B9:FA:20)`, `Muse-EEG (00:55:DA:BB:CD:CD)`, etc.).
 
 ## Technical Details
 
