@@ -4,6 +4,7 @@
 ## [0.1.8]
 
 ### Changed
+- **Default Clock Model**: Changed default clock synchronization from `adaptive` to `windowed`. Validation testing showed `windowed` provides the most stable timing across different devices (based on internal controlled testing). See `clocks.py` docstring for full validation results.
 - **0x88 Packet Support**: Added handling for new 0x88 packet type found in newer firmware. Contains embedded battery info and ~200 bytes of unknown data (possibly processed signals).
 - **Viewer Improvements**:
   - Battery display now hidden when battery stream is unavailable (instead of showing "--%%")

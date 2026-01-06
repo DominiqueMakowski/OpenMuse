@@ -141,6 +141,13 @@ import numpy as np
 from bleak.exc import BleakError
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
+from .clocks import (
+    AdaptiveOffsetClock,
+    ConstrainedRLSClock,
+    RobustOffsetClock,
+    StandardRLSClock,
+    WindowedRegressionClock,
+)
 from .decode import (
     ACCGYRO_CHANNELS,
     BATTERY_CHANNELS,
@@ -151,13 +158,6 @@ from .decode import (
 )
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
-from .clocks import (
-    AdaptiveOffsetClock,
-    ConstrainedRLSClock,
-    RobustOffsetClock,
-    StandardRLSClock,
-    WindowedRegressionClock,
-)
 
 MAX_BUFFER_PACKETS = 52  # ~200ms capacity for 256Hz
 FLUSH_INTERVAL = 0.2  # 200ms jitter buffer
@@ -250,7 +250,7 @@ async def _stream_async(
     duration: Optional[float] = None,
     raw_data_file: Optional[TextIO] = None,
     verbose: bool = True,
-    clock_model: str = "adaptive",
+    clock_model: str = "windowed",
 ):
     """Asynchronous context for BLE connection and LSL streaming."""
 
@@ -320,9 +320,7 @@ async def _stream_async(
             # Push chunk
             try:
                 with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore", message=".*A single sample is pushed.*"
-                    )
+                    warnings.filterwarnings("ignore", message=".*A single sample is pushed.*")
                     stream.outlet.push_chunk(
                         x=sorted_data.astype(np.float32, copy=False),
                         timestamp=sorted_timestamps.astype(np.float64, copy=False),
@@ -367,9 +365,7 @@ async def _stream_async(
                     stream.last_abs_tick,
                     stream.sample_counter,
                 )
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
-                    make_timestamps(pkt_list, *current_state)
-                )
+                array, base_time, wrap_offset, last_abs_tick, sample_counter = make_timestamps(pkt_list, *current_state)
                 decoded[sensor_type] = array
 
                 # Update state
@@ -404,9 +400,7 @@ async def _stream_async(
 
         start_time = time.monotonic()
         data_callbacks = {uuid: _on_data for uuid in MuseS.DATA_CHARACTERISTICS}
-        await MuseS.connect_and_initialize(
-            client, preset, data_callbacks, verbose=verbose
-        )
+        await MuseS.connect_and_initialize(client, preset, data_callbacks, verbose=verbose)
 
         if verbose:
             print("Streaming data... (Press Ctrl+C to stop)")
@@ -429,7 +423,7 @@ def stream(
     duration: Optional[float] = None,
     record: Union[bool, str] = False,
     verbose: bool = True,
-    clock: str = "adaptive",
+    clock: str = "windowed",
 ) -> None:
     """
     Stream decoded EEG and accelerometer/gyroscope data over LSL.
@@ -450,9 +444,7 @@ def stream(
             print(f"Warning: Could not open file for recording: {e}")
 
     try:
-        asyncio.run(
-            _stream_async(address, preset, duration, raw_data_file, verbose, clock)
-        )
+        asyncio.run(_stream_async(address, preset, duration, raw_data_file, verbose, clock))
     except KeyboardInterrupt:
         if verbose:
             print("Streaming stopped by user.")
