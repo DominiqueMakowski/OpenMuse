@@ -473,8 +473,8 @@ class RealtimeViewer:
             self.lbl_bat.text = ""
         
         self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
-        margin_norm_x = 0.016
-        margin_norm_y = 0.035
+        margin_norm_x = 0.984 #0.016
+        margin_norm_y = 0.965 #0.035
         self.lbl_bat.pos = ((1.0 - margin_norm_x) * w, margin_norm_y * h)
 
         # Shader margins for left/right
