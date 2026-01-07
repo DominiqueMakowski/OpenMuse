@@ -277,7 +277,7 @@ class RealtimeViewer:
             font_size=10,
             bold=True,
             anchor_x="right",
-            anchor_y="top",
+            anchor_y="bottom",
         )
 
     def _update_time_labels(self):
@@ -566,15 +566,10 @@ class RealtimeViewer:
         for t in all_labels:
             t.transforms.configure(canvas=self.canvas, viewport=(0, 0, w, h))
 
-        # Position Battery Text (Top Right)
-        BASE_FONT_BAT = 12
-        dpi_scale = getattr(self.canvas, 'pixel_scale', 1.0)
-        scale_factor = min(w / 1400, h / 900) * dpi_scale
-        self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
-
-        margin_norm_x = 0.98
-        margin_norm_y = 0.98
-        self.lbl_bat.pos = ((1.0 - margin_norm_x) * w, margin_norm_y * h)
+        # Position Time Axis
+        for i, t in enumerate(self.lbl_time):
+            x = w * (0.12 + (i / 5) * (0.83))
+            t.pos = (x, h - 5)
 
     def on_mouse_wheel(self, event):
         delta = event.delta[1] if hasattr(event.delta, "__getitem__") else event.delta
