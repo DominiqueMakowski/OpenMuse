@@ -445,6 +445,15 @@ class RealtimeViewer:
         margin_bottom = 0.05
         h_plot = 1.0 - margin_bottom
 
+        # Base font sizes
+        BASE_FONT_NAME = 8
+        BASE_FONT_QUAL = 7
+        BASE_FONT_TICK = 4
+        BASE_FONT_BAT = 12
+
+        # Scale factor relative to canvas size
+        scale_factor = min(w / 1400, h / 900)
+
         # Update Battery Label Text
         # Only show battery if we have a battery stream AND have received data
         if self.battery_level is not None:
@@ -462,6 +471,16 @@ class RealtimeViewer:
         elif self.battery_stream_idx is None:
             # No battery stream available - hide the label
             self.lbl_bat.text = ""
+        
+        self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
+        margin_norm_x = 0.016
+        margin_norm_y = 0.035
+        self.lbl_bat.pos = ((1.0 - margin_norm_x) * w, margin_norm_y * h)
+
+        # Shader margins for left/right
+        shader_margin_left = 0.12
+        label_offset = 0.03
+        tick_offset = 0.005
 
         for ch in self.channel_info:
             # Channel slot geometry in pixels
@@ -471,13 +490,21 @@ class RealtimeViewer:
 
             # Convert to Vispy coordinates (origin top-left)
             y_px_center = h * (1.0 - y_rel_center)
+            padding_factor = 0.30
+            y_px_top    = h * (1.0 - (y_rel_center + slot_h_rel * padding_factor))
+            y_px_bot    = h * (1.0 - (y_rel_center - slot_h_rel * padding_factor))
 
             # Name
-            self.lbl_names[ch["data_idx"]].pos = (w * 0.11, y_px_center)
+            label_x = w * (shader_margin_left - label_offset)
+            label_x = np.clip(label_x, 2, w - 2)
+            lbl_name = self.lbl_names[ch["data_idx"]]
+            lbl_name.pos = (label_x, y_px_center)
+            lbl_name.font_size = max(4, int(BASE_FONT_NAME * scale_factor))
 
             # Quality
             lbl_q = self.lbl_qual[ch["data_idx"]]
             lbl_q.pos = (w * 0.96, y_px_center)
+            lbl_q.font_size = max(4, int(BASE_FONT_QUAL * scale_factor))
             if ch["is_eeg"] and len(ch["quality_buf"]) > 50:
                 imp = np.std(ch["quality_buf"])
                 lbl_q.text = f"σ:{imp:.0f}"
@@ -493,8 +520,8 @@ class RealtimeViewer:
             val_top = ch["range"] / 2.0
             val_bot = -ch["range"] / 2.0
 
-            y_px_top = h * (1.0 - (y_rel_center + (slot_h_rel * 0.45)))
-            y_px_bot = h * (1.0 - (y_rel_center - (slot_h_rel * 0.45)))
+            y_px_top = h * (1.0 - (y_rel_center + (slot_h_rel * 0.30)))
+            y_px_bot = h * (1.0 - (y_rel_center - (slot_h_rel * 0.30)))
 
             ticks = self.lbl_ticks[ch["data_idx"]]
             ticks[0].text = f"{val_top:.0f}" if abs(val_top) >= 10 else f"{val_top:.1f}"
