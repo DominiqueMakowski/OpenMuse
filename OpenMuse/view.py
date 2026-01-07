@@ -54,8 +54,8 @@ void main() {
     float slot_bottom = margin_bottom + (channel_idx * slot_height);
     float slot_center = slot_bottom + (slot_height * 0.5);
 
-    // Scale: 0.45 leaves 10% padding between channels
-    float y = slot_center + (a_position * slot_height * 0.45 * a_y_scale);
+    // Scale: 0.30
+    float y = slot_center + (a_position * slot_height * 0.30 * a_y_scale);
 
     gl_Position = u_projection * vec4(x * u_scale.x, y, 0.0, 1.0);
     v_color = vec4(a_color, 1.0);
@@ -280,6 +280,27 @@ class RealtimeViewer:
             anchor_y="top",
         )
 
+    def _update_time_labels(self):
+        w, h = self.canvas.size
+        margin_left = 0.12
+        margin_right = 0.05
+        margin_bottom = 0.98
+        n_ticks = len(self.lbl_time)
+        usable_width = 1.0 - margin_left - margin_right
+
+        label_y = margin_bottom * 1
+
+        BASE_FONT_TIME = 7
+        scale_factor = min(w / 1400, h / 900)
+
+        for i, t in enumerate(self.lbl_time):
+            norm_x = margin_left + (i / (n_ticks - 1)) * usable_width
+            t.pos = (norm_x * w, label_y * h)
+            t.font_size = max(4, int(BASE_FONT_TIME * scale_factor))
+
+            time_val = self.window_duration * (1 - i / (n_ticks - 1))
+            t.text = f"-{time_val:.1f}s" if time_val < 10 else f"-{int(time_val)}s"
+
     def _init_grid_lines(self):
         limit_pts = []
         zero_pts = []
@@ -294,8 +315,8 @@ class RealtimeViewer:
             y_base = margin_bottom + (i * slot_h)
             y_center = y_base + (slot_h * 0.5)
 
-            y_top = y_center + (slot_h * 0.45)
-            y_bot = y_center - (slot_h * 0.45)
+            y_top = y_center + (slot_h * 0.30)
+            y_bot = y_center - (slot_h * 0.30)
 
             x1, x2 = margin_left, 1.0 - margin_right
 
@@ -428,10 +449,14 @@ class RealtimeViewer:
         # Only show battery if we have a battery stream AND have received data
         if self.battery_level is not None:
             self.lbl_bat.text = f"{self.battery_level:.0f}%"
-            if self.battery_level > 50:
-                self.lbl_bat.color = "lime"
-            elif self.battery_level > 20:
+            if self.battery_level > 80:
+                self.lbl_bat.color = "green"
+            elif self.battery_level > 60:
+                self.lbl_bat.color = "yellowgreen"
+            elif self.battery_level > 40:
                 self.lbl_bat.color = "yellow"
+            elif self.battery_level > 20:
+                self.lbl_bat.color = "orangered"
             else:
                 self.lbl_bat.color = "red"
         elif self.battery_stream_idx is None:
@@ -520,10 +545,14 @@ class RealtimeViewer:
             t.pos = (x, h - 5)
 
         # Position Battery Text (Top Right)
-        # Margin from edges
-        margin_x = 20
-        margin_y = 20
-        self.lbl_bat.pos = (w - margin_x, margin_y)
+        BASE_FONT_BAT = 12
+        dpi_scale = getattr(self.canvas, 'pixel_scale', 1.0)
+        scale_factor = min(w / 1400, h / 900) * dpi_scale
+        self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
+
+        margin_norm_x = 0.02
+        margin_norm_y = 0.02
+        self.lbl_bat.pos = ((1.0 - margin_norm_x) * w, margin_norm_y * h)
 
     def on_mouse_wheel(self, event):
         delta = event.delta[1] if hasattr(event.delta, "__getitem__") else event.delta
