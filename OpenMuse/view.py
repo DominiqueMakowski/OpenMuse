@@ -474,7 +474,7 @@ class RealtimeViewer:
         
         self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
         margin_norm_x = 0.016
-        margin_norm_y = 0.5
+        margin_norm_y = 0.95
         self.lbl_bat.pos = ((1.0 - margin_norm_x) * w, margin_norm_y * h)
 
         # Shader margins for left/right
@@ -520,16 +520,20 @@ class RealtimeViewer:
             val_top = ch["range"] / 2.0
             val_bot = -ch["range"] / 2.0
 
-            y_px_top = h * (1.0 - (y_rel_center + (slot_h_rel * 0.30)))
-            y_px_bot = h * (1.0 - (y_rel_center - (slot_h_rel * 0.30)))
-
+            tick_x = w * (shader_margin_left - tick_offset)
+            tick_x = np.clip(tick_x, 2, w - 2)
+            val_top = ch["range"] / 2.0
+            val_bot = -ch["range"] / 2.0
             ticks = self.lbl_ticks[ch["data_idx"]]
             ticks[0].text = f"{val_top:.0f}" if abs(val_top) >= 10 else f"{val_top:.1f}"
-            ticks[0].pos = (w * 0.115, y_px_top)
+            ticks[0].pos = (tick_x, y_px_top)
+            ticks[0].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
             ticks[1].text = "0"
-            ticks[1].pos = (w * 0.115, y_px_center)
+            ticks[1].pos = (tick_x, y_px_center)
+            ticks[1].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
             ticks[2].text = f"{val_bot:.0f}" if abs(val_bot) >= 10 else f"{val_bot:.1f}"
-            ticks[2].pos = (w * 0.115, y_px_bot)
+            ticks[2].pos = (tick_x, y_px_bot)
+            ticks[2].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
 
     def on_draw(self, event):
         gloo.clear(color=(0.1, 0.1, 0.1, 1.0))
