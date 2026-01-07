@@ -282,24 +282,35 @@ class RealtimeViewer:
 
     def _update_time_labels(self):
         w, h = self.canvas.size
+
+        # --- Plot margins (must match shader) ---
         margin_left = 0.12
         margin_right = 0.05
-        margin_bottom = 0.98
+        margin_bottom = 0.05
+
         n_ticks = len(self.lbl_time)
         usable_width = 1.0 - margin_left - margin_right
 
-        label_y = margin_bottom * 1
+        # Place labels slightly below plot
+        y_norm = 1.0 - margin_bottom + 0.015
 
+        # Font scaling
         BASE_FONT_TIME = 7
         scale_factor = min(w / 1400, h / 900)
 
         for i, t in enumerate(self.lbl_time):
-            norm_x = margin_left + (i / (n_ticks - 1)) * usable_width
-            t.pos = (norm_x * w, label_y * h)
+            x_norm = margin_left + (i / (n_ticks - 1)) * usable_width
+
+            # Convert normalized → pixel
+            t.pos = (x_norm * w, y_norm * h)
+
+            # Font scaling
             t.font_size = max(4, int(BASE_FONT_TIME * scale_factor))
 
+            # Label text
             time_val = self.window_duration * (1 - i / (n_ticks - 1))
             t.text = f"-{time_val:.1f}s" if time_val < 10 else f"-{int(time_val)}s"
+
 
     def _init_grid_lines(self):
         limit_pts = []
@@ -449,7 +460,7 @@ class RealtimeViewer:
         BASE_FONT_NAME = 8
         BASE_FONT_QUAL = 7
         BASE_FONT_TICK = 4
-        BASE_FONT_BAT = 12
+        BASE_FONT_BAT = 10
 
         # Scale factor relative to canvas size
         scale_factor = min(w / 1400, h / 900)
@@ -473,7 +484,7 @@ class RealtimeViewer:
             self.lbl_bat.text = ""
         
         self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
-        margin_norm_x = 0.95
+        margin_norm_x = 0.96
         margin_norm_y = 0.035
         self.lbl_bat.pos = ((1.0 - margin_norm_x) * w, margin_norm_y * h)
 
@@ -570,6 +581,7 @@ class RealtimeViewer:
         for t in all_labels:
             t.transforms.configure(canvas=self.canvas, viewport=(0, 0, w, h))
 
+        self._update_time_labels()
 
     def on_mouse_wheel(self, event):
         delta = event.delta[1] if hasattr(event.delta, "__getitem__") else event.delta
