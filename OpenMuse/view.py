@@ -292,7 +292,7 @@ class RealtimeViewer:
         usable_width = 1.0 - margin_left - margin_right
 
         # Place labels slightly below plot
-        y_norm = 1.0 - margin_bottom + 0.015
+        y_norm = 1.0 - margin_bottom + 0.030
 
         # Font scaling
         BASE_FONT_TIME = 7
@@ -309,7 +309,7 @@ class RealtimeViewer:
 
             # Label text
             time_val = self.window_duration * (1 - i / (n_ticks - 1))
-            t.text = f"-{time_val:.1f}s" if time_val < 10 else f"-{int(time_val)}s"
+            t.text = f"-{time_val:.1f}s".replace(".0s", "s") if time_val < 10 else f"-{int(time_val)}s"
 
 
     def _init_grid_lines(self):
