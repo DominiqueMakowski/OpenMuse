@@ -320,7 +320,9 @@ async def _stream_async(
             # Push chunk
             try:
                 with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", message=".*A single sample is pushed.*")
+                    warnings.filterwarnings(
+                        "ignore", message=".*A single sample is pushed.*"
+                    )
                     stream.outlet.push_chunk(
                         x=sorted_data.astype(np.float32, copy=False),
                         timestamp=sorted_timestamps.astype(np.float64, copy=False),
@@ -365,7 +367,9 @@ async def _stream_async(
                     stream.last_abs_tick,
                     stream.sample_counter,
                 )
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = make_timestamps(pkt_list, *current_state)
+                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
+                    make_timestamps(pkt_list, *current_state)
+                )
                 decoded[sensor_type] = array
 
                 # Update state
@@ -400,7 +404,9 @@ async def _stream_async(
 
         start_time = time.monotonic()
         data_callbacks = {uuid: _on_data for uuid in MuseS.DATA_CHARACTERISTICS}
-        await MuseS.connect_and_initialize(client, preset, data_callbacks, verbose=verbose)
+        await MuseS.connect_and_initialize(
+            client, preset, data_callbacks, verbose=verbose
+        )
 
         if verbose:
             print("Streaming data... (Press Ctrl+C to stop)")
@@ -418,7 +424,7 @@ async def _stream_async(
 
 
 def stream(
-    address: str,
+    address: Union[str, List[str]],
     preset: str = "p1041",
     duration: Optional[float] = None,
     record: Union[bool, str] = False,
@@ -427,24 +433,65 @@ def stream(
 ) -> None:
     """
     Stream decoded EEG and accelerometer/gyroscope data over LSL.
+    Supports streaming from a single device (str) or multiple devices (List[str]) in parallel.
+
+    When streaming multiple devices, if `record` is a string (filename), the device address
+    will be appended to the filename to avoid collisions.
     """
     configure_lsl_api_cfg()
 
-    raw_data_file = None
-    file_handle = None
-    if record:
-        if isinstance(record, str):
-            filename = record
-        else:
-            filename = f"rawdata_stream_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        try:
-            file_handle = open(filename, "w", encoding="utf-8")
-            raw_data_file = file_handle
-        except IOError as e:
-            print(f"Warning: Could not open file for recording: {e}")
+    addresses = [address] if isinstance(address, str) else address
+    # Remove duplicates if any
+    addresses = list(set(addresses))
+
+    tasks = []
+    file_handles = []
+
+    async def run_multistream():
+        if verbose:
+            print(f"Starting stream for {len(addresses)} device(s)...")
+
+        for addr in addresses:
+            raw_data_file = None
+            if record:
+                # Generate unique filename for this device
+                # Sanitize address for filename
+                sanitized_addr = addr.replace(":", "").replace("-", "")
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+                if isinstance(record, str):
+                    if len(addresses) > 1:
+                        # Insert address into provided filename
+                        if "." in record:
+                            parts = record.rsplit(".", 1)
+                            filename = f"{parts[0]}_{sanitized_addr}.{parts[1]}"
+                        else:
+                            filename = f"{record}_{sanitized_addr}"
+                    else:
+                        filename = record
+                else:
+                    # Default filename format
+                    filename = f"rawdata_stream_{sanitized_addr}_{timestamp}.txt"
+
+                try:
+                    f = open(filename, "w", encoding="utf-8")
+                    file_handles.append(f)
+                    raw_data_file = f
+                    if verbose:
+                        print(f"Recording raw data for {addr} to {filename}")
+                except IOError as e:
+                    print(f"Warning: Could not open file for recording {addr}: {e}")
+
+            # Create task for this device
+            tasks.append(
+                _stream_async(addr, preset, duration, raw_data_file, verbose, clock)
+            )
+
+        # Run all streams concurrently
+        await asyncio.gather(*tasks)
 
     try:
-        asyncio.run(_stream_async(address, preset, duration, raw_data_file, verbose, clock))
+        asyncio.run(run_multistream())
     except KeyboardInterrupt:
         if verbose:
             print("Streaming stopped by user.")
@@ -453,5 +500,8 @@ def stream(
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
     finally:
-        if file_handle:
-            file_handle.close()
+        for f in file_handles:
+            try:
+                f.close()
+            except Exception:
+                pass

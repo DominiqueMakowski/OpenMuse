@@ -92,7 +92,7 @@ The following options are available:
 - `--address`: The MAC address of your Muse device (required)
 - `--duration`: Duration of the recording in seconds (if not specified, streaming will continue until you press Ctrl+C in the terminal)
 - `--preset`: Preset configuration (default: `p1041` for all channels)
-- `--outfile`: Optional JSON file to save the streamed data
+- `--record`: Record raw BLE packets to a file (optional)
 
 ### Visualize Live Streams
 
@@ -108,17 +108,15 @@ To record from multiple Muse devices simultaneously (e.g., for hyperscanning stu
 
 1. **Discover devices**: Power on all Muse headbands and run `OpenMuse find` to note down each device's MAC address.
 
-2. **Start streaming**: Open a **separate terminal for each device** and run the stream command with each MAC address:
+2. **Start streaming**: You can stream from multiple devices simultaneously by passing multiple MAC addresses:
 
-   ```powershell
-   # Terminal 1
-   OpenMuse stream --address 00:55:DA:B9:FA:20
-   
-   # Terminal 2
-   OpenMuse stream --address 00:55:DA:BB:CD:CD
-   ```
+```powershell
+OpenMuse stream --address 00:55:DA:B9:FA:20 00:55:DA:BB:CD:CD
+```
 
-3. **Visualize (optional)**: Open additional terminals to view each device's streams:
+This will manage all connections in parallel within a single process. LSL streams will be named with their respective device IDs (e.g., `Muse-EEG (MAC1)`), allowing you to distinguish them on the receiving end.
+
+3. **Visualize (optional)**: Open new additional terminals to view each device's streams:
 
    ```powershell
    # View first device

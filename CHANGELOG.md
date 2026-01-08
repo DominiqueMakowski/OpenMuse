@@ -3,6 +3,9 @@
 
 ## [0.1.8]
 
+### Added
+- **Hyperscanning Support**: The `stream` command now accepts multiple MAC addresses (space-separated) to stream from multiple Muse devices simultaneously in a single process.
+
 ### Changed
 - **Default Clock Model**: Changed default clock synchronization from `adaptive` to `windowed`. Validation testing showed `windowed` provides the most stable timing across different devices (based on internal controlled testing). See `clocks.py` docstring for full validation results.
 - **0x88 Packet Support**: Added handling for new 0x88 packet type found in newer firmware. Contains embedded battery info and ~200 bytes of unknown data (possibly processed signals).
