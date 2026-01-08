@@ -54,8 +54,8 @@ void main() {
     float slot_bottom = margin_bottom + (channel_idx * slot_height);
     float slot_center = slot_bottom + (slot_height * 0.5);
 
-    // Scale: 0.45 leaves 10% padding between channels
-    float y = slot_center + (a_position * slot_height * 0.45 * a_y_scale);
+    // Scale: 0.30
+    float y = slot_center + (a_position * slot_height * 0.30 * a_y_scale);
 
     gl_Position = u_projection * vec4(x * u_scale.x, y, 0.0, 1.0);
     v_color = vec4(a_color, 1.0);
@@ -280,6 +280,37 @@ class RealtimeViewer:
             anchor_y="top",
         )
 
+    def _update_time_labels(self):
+        w, h = self.canvas.size
+
+        # --- Plot margins (must match shader) ---
+        margin_left = 0.12
+        margin_right = 0.05
+        margin_bottom = 0.05
+
+        n_ticks = len(self.lbl_time)
+        usable_width = 1.0 - margin_left - margin_right
+
+        # Place labels slightly below plot
+        y_norm = 1.0 - margin_bottom + 0.025
+
+        # Font scaling
+        BASE_FONT_TIME = 7
+        scale_factor = min(w / 1400, h / 900)
+
+        for i, t in enumerate(self.lbl_time):
+            x_norm = margin_left + (i / (n_ticks - 1)) * usable_width
+
+            # Convert normalized → pixel
+            t.pos = (x_norm * w, y_norm * h)
+
+            # Font scaling
+            t.font_size = max(4, int(BASE_FONT_TIME * scale_factor))
+
+            # Label text
+            time_val = self.window_duration * (1 - i / (n_ticks - 1))
+            t.text = f"-{time_val:.1f}s".replace(".0s", "s") if time_val < 10 else f"-{int(time_val)}s"
+
     def _init_grid_lines(self):
         limit_pts = []
         zero_pts = []
@@ -294,8 +325,8 @@ class RealtimeViewer:
             y_base = margin_bottom + (i * slot_h)
             y_center = y_base + (slot_h * 0.5)
 
-            y_top = y_center + (slot_h * 0.45)
-            y_bot = y_center - (slot_h * 0.45)
+            y_top = y_center + (slot_h * 0.30)
+            y_bot = y_center - (slot_h * 0.30)
 
             x1, x2 = margin_left, 1.0 - margin_right
 
@@ -424,19 +455,42 @@ class RealtimeViewer:
         margin_bottom = 0.05
         h_plot = 1.0 - margin_bottom
 
+        # Base font sizes
+        BASE_FONT_NAME = 8
+        BASE_FONT_QUAL = 7
+        BASE_FONT_TICK = 4
+        BASE_FONT_BAT = 10
+
+        # Scale factor relative to canvas size
+        scale_factor = min(w / 1400, h / 900)
+
         # Update Battery Label Text
         # Only show battery if we have a battery stream AND have received data
         if self.battery_level is not None:
             self.lbl_bat.text = f"{self.battery_level:.0f}%"
-            if self.battery_level > 50:
-                self.lbl_bat.color = "lime"
-            elif self.battery_level > 20:
+            if self.battery_level > 80:
+                self.lbl_bat.color = "green"
+            elif self.battery_level > 60:
+                self.lbl_bat.color = "yellowgreen"
+            elif self.battery_level > 40:
                 self.lbl_bat.color = "yellow"
+            elif self.battery_level > 20:
+                self.lbl_bat.color = "orangered"
             else:
                 self.lbl_bat.color = "red"
         elif self.battery_stream_idx is None:
             # No battery stream available - hide the label
             self.lbl_bat.text = ""
+        
+        self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
+        margin_norm_x = 0.96
+        margin_norm_y = 0.035
+        self.lbl_bat.pos = ((1.0 - margin_norm_x) * w, margin_norm_y * h)
+
+        # Shader margins for left/right
+        shader_margin_left = 0.12
+        label_offset = 0.03
+        tick_offset = 0.005
 
         for ch in self.channel_info:
             # Channel slot geometry in pixels
@@ -446,13 +500,21 @@ class RealtimeViewer:
 
             # Convert to Vispy coordinates (origin top-left)
             y_px_center = h * (1.0 - y_rel_center)
+            padding_factor = 0.30
+            y_px_top    = h * (1.0 - (y_rel_center + slot_h_rel * padding_factor))
+            y_px_bot    = h * (1.0 - (y_rel_center - slot_h_rel * padding_factor))
 
             # Name
-            self.lbl_names[ch["data_idx"]].pos = (w * 0.11, y_px_center)
+            label_x = w * (shader_margin_left - label_offset)
+            label_x = np.clip(label_x, 2, w - 2)
+            lbl_name = self.lbl_names[ch["data_idx"]]
+            lbl_name.pos = (label_x, y_px_center)
+            lbl_name.font_size = max(4, int(BASE_FONT_NAME * scale_factor))
 
             # Quality
             lbl_q = self.lbl_qual[ch["data_idx"]]
             lbl_q.pos = (w * 0.96, y_px_center)
+            lbl_q.font_size = max(4, int(BASE_FONT_QUAL * scale_factor))
             if ch["is_eeg"] and len(ch["quality_buf"]) > 50:
                 imp = np.std(ch["quality_buf"])
                 lbl_q.text = f"σ:{imp:.0f}"
@@ -465,19 +527,20 @@ class RealtimeViewer:
                 lbl_q.text = ""
 
             # Ticks
+            tick_x = w * (shader_margin_left - tick_offset)
+            tick_x = np.clip(tick_x, 2, w - 2)
             val_top = ch["range"] / 2.0
             val_bot = -ch["range"] / 2.0
-
-            y_px_top = h * (1.0 - (y_rel_center + (slot_h_rel * 0.45)))
-            y_px_bot = h * (1.0 - (y_rel_center - (slot_h_rel * 0.45)))
-
             ticks = self.lbl_ticks[ch["data_idx"]]
             ticks[0].text = f"{val_top:.0f}" if abs(val_top) >= 10 else f"{val_top:.1f}"
-            ticks[0].pos = (w * 0.115, y_px_top)
+            ticks[0].pos = (tick_x, y_px_top)
+            ticks[0].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
             ticks[1].text = "0"
-            ticks[1].pos = (w * 0.115, y_px_center)
+            ticks[1].pos = (tick_x, y_px_center)
+            ticks[1].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
             ticks[2].text = f"{val_bot:.0f}" if abs(val_bot) >= 10 else f"{val_bot:.1f}"
-            ticks[2].pos = (w * 0.115, y_px_bot)
+            ticks[2].pos = (tick_x, y_px_bot)
+            ticks[2].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
 
     def on_draw(self, event):
         gloo.clear(color=(0.1, 0.1, 0.1, 1.0))
@@ -514,16 +577,7 @@ class RealtimeViewer:
         for t in all_labels:
             t.transforms.configure(canvas=self.canvas, viewport=(0, 0, w, h))
 
-        # Position Time Axis
-        for i, t in enumerate(self.lbl_time):
-            x = w * (0.12 + (i / 5) * (0.83))
-            t.pos = (x, h - 5)
-
-        # Position Battery Text (Top Right)
-        # Margin from edges
-        margin_x = 20
-        margin_y = 20
-        self.lbl_bat.pos = (w - margin_x, margin_y)
+        self._update_time_labels()
 
     def on_mouse_wheel(self, event):
         delta = event.delta[1] if hasattr(event.delta, "__getitem__") else event.delta
