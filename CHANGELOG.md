@@ -9,6 +9,10 @@
 - **Viewer Improvements**:
   - Battery display now hidden when battery stream is unavailable (instead of showing "--%%")
   - Channel order now consistent: EEG at top, then ACC/GYRO, then OPTICS at bottom
+  - 5-level battery display colour indicator added (as opposed to previous 3-level colour indicator)
+  - Movement of battery display to top-left (from top-right)
+  - Tick values, time axis, channel labels, and battery indicator now appropriately scale with window size
+  - Position of channel labels, tick values, and grid lines altered for readability
 - **Stream Naming Convention**: Updated LSL stream names to include device identifiers for better multi-device support.
   - Muse: `Muse-{sensor_type} ({device_id})` (e.g., `Muse-EEG (0055DA)`)
   - BITalino: `BITalino ({address})` (e.g., `BITalino (20:17:09:18:49:99)`)
