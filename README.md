@@ -102,7 +102,7 @@ To visualize live LSL streams, open a new terminal (while the streaming is runni
 OpenMuse view
 ```
 
-### Hyperscanning (Multiple Devices)
+### Hyperscanning (Multiple Devices Streaming)
 
 To record from multiple Muse devices simultaneously (e.g., for hyperscanning studies):
 
@@ -118,13 +118,13 @@ This will manage all connections in parallel within a single process. LSL stream
 
 3. **Visualize (optional)**: Open new additional terminals to view each device's streams:
 
-   ```powershell
-   # View first device
-   OpenMuse view --address 00:55:DA:B9:FA:20
-   
-   # View second device
-   OpenMuse view --address 00:55:DA:BB:CD:CD
-   ```
+```powershell
+# View first device
+OpenMuse view --address 00:55:DA:B9:FA:20
+
+# View second device
+OpenMuse view --address 00:55:DA:BB:CD:CD
+```
 
 4. **Record with LabRecorder**: Use [LabRecorder](https://github.com/labstreaminglayer/App-LabRecorder) to record all streams to an XDF file. Select all the streams from your devices (e.g., `Muse-EEG (00:55:DA:B9:FA:20)`, `Muse-EEG (00:55:DA:BB:CD:CD)`, etc.).
 
