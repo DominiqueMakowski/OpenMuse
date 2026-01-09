@@ -118,19 +118,24 @@ OpenMuse stream --address 00:55:DA:B9:FA:20 00:55:DA:BB:CD:CD
 
 This will manage all connections in parallel within a single process. LSL streams will be named with their respective device IDs (e.g., `Muse-EEG (MAC1)`), allowing you to distinguish them on the receiving end.
 
-3. **Visualize (optional)**: Open new additional terminals to view each device's streams:
+3. **Visualize (optional)**: When multiple devices are streaming, the viewer will automatically detect and display streams from only the first device by default to avoid confusion. To view a specific device, use the `--address` filter:
 
 ```powershell
 # View first device
 OpenMuse view --address 00:55:DA:B9:FA:20
 
-# View second device
+# View second device (open in a separate terminal)
 OpenMuse view --address 00:55:DA:BB:CD:CD
 ```
 
+> [!NOTE]
+> If you run `OpenMuse view` without the `--address` argument when multiple devices are streaming, it will automatically select the first detected device and display a warning message listing all available devices.
+
 4. **Record with LabRecorder**: Use [LabRecorder](https://github.com/labstreaminglayer/App-LabRecorder) to record all streams to an XDF file. Select all the streams from your devices (e.g., `Muse-EEG (00:55:DA:B9:FA:20)`, `Muse-EEG (00:55:DA:BB:CD:CD)`, etc.).
 
-5. **Without LSL**: You can also do raw recordings from multiple Muse devices simultaneously by passing multiple MAC addresses:
+#### Multi-Device Raw Recording (Alternative to LSL)
+
+You can also do raw BLE packet recordings from multiple Muse devices simultaneously by passing multiple MAC addresses:
 
 ```powershell
 OpenMuse record --address 00:55:DA:B9:FA:20 00:55:DA:BB:CD:CD --duration 60 --outfile data.txt

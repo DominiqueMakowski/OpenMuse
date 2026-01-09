@@ -11,6 +11,7 @@
 
 ### Changed
 - **Default Clock Model**: Changed default clock synchronization from `adaptive` to `windowed`. Validation testing showed `windowed` provides the most stable timing across different devices (based on internal controlled testing). See `clocks.py` docstring for full validation results.
+- **Improved Multi-Device Viewer Behavior**: When multiple Muse devices are streaming, the `view` command now automatically displays only the first device and shows a warning message listing all detected devices. Users can specify which device to view using the `--address` argument. This prevents the confusing behavior where all channels from all devices were mixed in a single viewer window.
 - **0x88 Packet Support**: Added handling for new 0x88 packet type found in newer firmware. Contains embedded battery info and ~200 bytes of unknown data (possibly processed signals).
 - **Viewer Improvements**:
   - Battery display now hidden when battery stream is unavailable (instead of showing "--%%")

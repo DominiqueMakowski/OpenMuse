@@ -309,7 +309,11 @@ class RealtimeViewer:
 
             # Label text
             time_val = self.window_duration * (1 - i / (n_ticks - 1))
-            t.text = f"-{time_val:.1f}s".replace(".0s", "s") if time_val < 10 else f"-{int(time_val)}s"
+            t.text = (
+                f"-{time_val:.1f}s".replace(".0s", "s")
+                if time_val < 10
+                else f"-{int(time_val)}s"
+            )
 
     def _init_grid_lines(self):
         limit_pts = []
@@ -481,7 +485,7 @@ class RealtimeViewer:
         elif self.battery_stream_idx is None:
             # No battery stream available - hide the label
             self.lbl_bat.text = ""
-        
+
         self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
         margin_norm_x = 0.96
         margin_norm_y = 0.035
@@ -501,8 +505,8 @@ class RealtimeViewer:
             # Convert to Vispy coordinates (origin top-left)
             y_px_center = h * (1.0 - y_rel_center)
             padding_factor = 0.30
-            y_px_top    = h * (1.0 - (y_rel_center + slot_h_rel * padding_factor))
-            y_px_bot    = h * (1.0 - (y_rel_center - slot_h_rel * padding_factor))
+            y_px_top = h * (1.0 - (y_rel_center + slot_h_rel * padding_factor))
+            y_px_bot = h * (1.0 - (y_rel_center - slot_h_rel * padding_factor))
 
             # Name
             label_x = w * (shader_margin_left - label_offset)
@@ -670,19 +674,61 @@ def view(stream_name=None, address=None, window_duration=10.0, **kwargs):
             found_names = [stream_name]
     else:
         # Auto-detect Muse streams (format: Muse-TYPE (DEVICE_ID))
+        # Collect streams by device address
+        device_streams = {}
+
         for info in infos:
             n = info.name
             if "Muse" in n:
                 if any(t in n for t in ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]):
-                    # If address filter is specified, only include matching streams
-                    if address is None or address in n:
-                        found_names.append(n)
+                    # Extract device ID from stream name (e.g., "Muse-EEG (00:55:DA:B9:FA:20)")
+                    if "(" in n and ")" in n:
+                        device_id = n.split("(")[-1].split(")")[0].strip()
+                    else:
+                        device_id = "unknown"
 
-        # Remove duplicates
-        found_names = list(set(found_names))
+                    if device_id not in device_streams:
+                        device_streams[device_id] = []
+                    device_streams[device_id].append(n)
+
+        # Check if multiple devices detected
+        detected_devices = list(device_streams.keys())
+
+        if len(detected_devices) > 1 and address is None:
+            print("\n⚠ WARNING: Multiple Muse devices detected!")
+            print("The following devices are streaming:")
+            for i, device_id in enumerate(detected_devices, 1):
+                print(f"  {i}. {device_id}")
+            print(
+                "To view a specific device, open separate terminals and use the --address argument:"
+            )
+            print(f"  Example: OpenMuse view --address {detected_devices[0]}")
+            print("\nProceeding to display streams from the first device only...")
+            print(f"Selected device: {detected_devices[0]}\n")
+
+            # Use only the first device's streams
+            found_names = device_streams[detected_devices[0]]
+        elif detected_devices:
+            # Single device or address filter specified
+            if address:
+                # Filter by address
+                matching_devices = [d for d in detected_devices if address in d]
+                if matching_devices:
+                    found_names = device_streams[matching_devices[0]]
+                    if len(matching_devices) > 1:
+                        print(
+                            f"Note: Address '{address}' matches multiple devices. Using first match: {matching_devices[0]}"
+                        )
+                else:
+                    print(f"No devices matching address '{address}' found.")
+                    print(f"Available devices: {', '.join(detected_devices)}")
+                    return
+            else:
+                # Single device, use it
+                found_names = device_streams[detected_devices[0]]
 
     if not found_names:
-        print("No Muse streams found. Is 'openmuse-stream' running?")
+        print("No Muse streams found. Is 'OpenMuse stream' running?")
         return
 
     for name in found_names:
@@ -696,7 +742,7 @@ def view(stream_name=None, address=None, window_duration=10.0, **kwargs):
             pass
 
     if not streams:
-        print("Error: No streams found. Is 'openmuse-stream' running?")
+        print("Error: No streams found. Is 'OpenMuse stream' running?")
         return
 
     # Instantiate viewer
