@@ -34,7 +34,10 @@ def main(argv=None):
         "record", help="Connect and record raw packets to a text file"
     )
     p_rec.add_argument(
-        "--address", required=True, help="Device address (e.g., MAC on Windows)"
+        "--address",
+        required=True,
+        nargs="+",
+        help="Device address(es) (e.g., MAC on Windows). Pass multiple space-separated addresses for multi-device recording.",
     )
     p_rec.add_argument(
         "--duration",
@@ -44,7 +47,10 @@ def main(argv=None):
         help="Recording duration in seconds (default: 30)",
     )
     p_rec.add_argument(
-        "--outfile", "-o", default="muse_record.txt", help="Output text file path"
+        "--outfile",
+        "-o",
+        default="muse_record.txt",
+        help="Output text file path (for multi-device, address will be appended)",
     )
     p_rec.add_argument(
         "--preset", default="p1041", help="Preset to send (by default, p1041)"

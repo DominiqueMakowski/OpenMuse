@@ -55,6 +55,8 @@ OpenMuse record --address <your-muse-address> --duration 60 --outfile data.txt
 > [!TIP]
 > By default, recording and streaming use the `--preset p1041`, which enables all channels. You can change the preset using the `--preset` argument (see below for the list of documented presets).
 
+#### Loading Recorded Data
+
 Once your file is recorded, you can load it in Python using:
 
 ```python
@@ -127,6 +129,14 @@ OpenMuse view --address 00:55:DA:BB:CD:CD
 ```
 
 4. **Record with LabRecorder**: Use [LabRecorder](https://github.com/labstreaminglayer/App-LabRecorder) to record all streams to an XDF file. Select all the streams from your devices (e.g., `Muse-EEG (00:55:DA:B9:FA:20)`, `Muse-EEG (00:55:DA:BB:CD:CD)`, etc.).
+
+5. **Without LSL**: You can also do raw recordings from multiple Muse devices simultaneously by passing multiple MAC addresses:
+
+```powershell
+OpenMuse record --address 00:55:DA:B9:FA:20 00:55:DA:BB:CD:CD --duration 60 --outfile data.txt
+```
+
+When recording from multiple devices, the device address will be automatically appended to the filename to avoid collisions (e.g., `data_0055DAB9FA20.txt`, `data_0055DABBCDCD.txt`).
 
 ## Technical Details
 

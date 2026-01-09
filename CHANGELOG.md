@@ -1,10 +1,13 @@
 # Changelog
 
 
+
 ## [0.1.8]
 
 ### Added
 - **Hyperscanning Support**: The `stream` command now accepts multiple MAC addresses (space-separated) to stream from multiple Muse devices simultaneously in a single process.
+- **Multi-device Recording Support**: The `record` command now accepts multiple MAC addresses (space-separated) to record from multiple Muse devices simultaneously in a single process, similar to the `stream` command. Device addresses are automatically appended to filenames to avoid collisions.
+
 
 ### Changed
 - **Default Clock Model**: Changed default clock synchronization from `adaptive` to `windowed`. Validation testing showed `windowed` provides the most stable timing across different devices (based on internal controlled testing). See `clocks.py` docstring for full validation results.
