@@ -112,6 +112,13 @@ def main(argv=None):
         choices=["adaptive", "constrained", "robust", "standard", "windowed"],
         help="Clock synchronization model (default: windowed)",
     )
+    p_stream.add_argument(
+        "--sensors",
+        nargs="+",
+        default=None,
+        choices=["EEG", "ACCGYRO", "OPTICS", "BATTERY"],
+        help="Sensor types to stream (default: all). Example: --sensors EEG OPTICS",
+    )
 
     def handle_stream(ns):
         from .stream import stream
@@ -125,6 +132,7 @@ def main(argv=None):
             record=ns.record,  # 'outfile' parameter removed
             verbose=True,
             clock=ns.clock,
+            sensors=ns.sensors,
         )
         return 0
 

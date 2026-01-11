@@ -251,8 +251,23 @@ async def _stream_async(
     raw_data_file: Optional[TextIO] = None,
     verbose: bool = True,
     clock_model: str = "windowed",
+    sensors: Optional[List[str]] = None,
 ):
-    """Asynchronous context for BLE connection and LSL streaming."""
+    """Asynchronous context for BLE connection and LSL streaming.
+
+    Parameters
+    ----------
+    sensors : Optional[List[str]]
+        List of sensor types to stream. If None, streams all sensors.
+        Valid values: "EEG", "ACCGYRO", "OPTICS", "BATTERY"
+    """
+
+    # Default to all sensors if not specified
+    if sensors is None:
+        sensors = ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]
+    else:
+        # Normalize to uppercase
+        sensors = [s.upper() for s in sensors]
 
     # --- Stream State ---
     streams: Dict[str, SensorStream] = {}
@@ -348,9 +363,9 @@ async def _stream_async(
         subpackets = parse_message(message)
         decoded: Dict[str, np.ndarray] = {}
 
-        # Ensure streams exist
+        # Ensure streams exist (only for requested sensor types)
         for sensor_type, pkt_list in subpackets.items():
-            if pkt_list and sensor_type not in streams:
+            if pkt_list and sensor_type not in streams and sensor_type in sensors:
                 n_channels = pkt_list[0].get("n_channels")
                 if n_channels:
                     streams[sensor_type] = create_stream_outlet(
@@ -401,6 +416,7 @@ async def _stream_async(
     async with bleak.BleakClient(address, timeout=15.0) as client:
         if verbose:
             print(f"Connected. Device: {client.name}")
+            print(f"Streaming sensors: {', '.join(sensors)}")
 
         start_time = time.monotonic()
         data_callbacks = {uuid: _on_data for uuid in MuseS.DATA_CHARACTERISTICS}
@@ -430,6 +446,7 @@ def stream(
     record: Union[bool, str] = False,
     verbose: bool = True,
     clock: str = "windowed",
+    sensors: Optional[List[str]] = None,
 ) -> None:
     """
     Stream decoded EEG and accelerometer/gyroscope data over LSL.
@@ -437,6 +454,12 @@ def stream(
 
     When streaming multiple devices, if `record` is a string (filename), the device address
     will be appended to the filename to avoid collisions.
+
+    Parameters
+    ----------
+    sensors : Optional[List[str]]
+        List of sensor types to stream. If None, streams all sensors (EEG, ACCGYRO, OPTICS, BATTERY).
+        Valid values: \"EEG\", \"ACCGYRO\", \"OPTICS\", \"BATTERY\".
     """
     configure_lsl_api_cfg()
 
@@ -484,7 +507,9 @@ def stream(
 
             # Create task for this device
             tasks.append(
-                _stream_async(addr, preset, duration, raw_data_file, verbose, clock)
+                _stream_async(
+                    addr, preset, duration, raw_data_file, verbose, clock, sensors
+                )
             )
 
         # Run all streams concurrently
