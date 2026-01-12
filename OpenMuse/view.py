@@ -48,7 +48,8 @@ void main() {
 
     // Y position (Stacking)
     float margin_bottom = 0.05;
-    float plot_height = 1.0 - margin_bottom;
+    float margin_top = 0.03;
+    float plot_height = 1.0 - margin_bottom - margin_top;
 
     float slot_height = plot_height / u_size.x;
     float slot_bottom = margin_bottom + (channel_idx * slot_height);
@@ -280,6 +281,16 @@ class RealtimeViewer:
             anchor_y="top",
         )
 
+        # Device MAC address – Anchor top center
+        self.lbl_device = TextVisual(
+            f"Device: {getattr(self, 'device_id', '')}",
+            color="gray",
+            font_size=8,
+            bold=True,
+            anchor_x="center",
+            anchor_y="top",
+        )
+
     def _update_time_labels(self):
         w, h = self.canvas.size
 
@@ -320,7 +331,8 @@ class RealtimeViewer:
         zero_pts = []
 
         margin_bottom = 0.05
-        h_plot = 1.0 - margin_bottom
+        margin_top = 0.03
+        h_plot = 1.0 - margin_bottom - margin_top
         margin_left = 0.12
         margin_right = 0.05
 
@@ -457,7 +469,8 @@ class RealtimeViewer:
 
         w, h = self.canvas.size
         margin_bottom = 0.05
-        h_plot = 1.0 - margin_bottom
+        margin_top = 0.03
+        h_plot = 1.0 - margin_bottom - margin_top
 
         # Base font sizes
         BASE_FONT_NAME = 8
@@ -563,7 +576,7 @@ class RealtimeViewer:
         self.program.draw("lines", indices=self.index_buffer)
 
         # 3. Text Labels
-        for t in self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]:
+        for t in self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat, self.lbl_device]:
             t.draw()
         for group in self.lbl_ticks:
             for t in group:
@@ -573,8 +586,17 @@ class RealtimeViewer:
         w, h = event.size
         gloo.set_viewport(0, 0, w, h)
 
+        # Device label position
+        top_margin = 0.0225
+        self.lbl_device.pos = (w * 0.5, top_margin * h)
+
+        # Font scaling relative to canvas
+        BASE_FONT_DEVICE = 8
+        scale_factor = min(w / 1400, h / 900)
+        self.lbl_device.font_size = int(BASE_FONT_DEVICE * scale_factor)
+
         # Update text transforms
-        all_labels = self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]
+        all_labels = self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat, self.lbl_device]
         for group in self.lbl_ticks:
             all_labels.extend(group)
 
@@ -708,6 +730,7 @@ def view(stream_name=None, address=None, window_duration=10.0, **kwargs):
 
             # Use only the first device's streams
             found_names = device_streams[detected_devices[0]]
+            selected_device_id = detected_devices[0]
         elif detected_devices:
             # Single device or address filter specified
             if address:
@@ -715,6 +738,7 @@ def view(stream_name=None, address=None, window_duration=10.0, **kwargs):
                 matching_devices = [d for d in detected_devices if address in d]
                 if matching_devices:
                     found_names = device_streams[matching_devices[0]]
+                    selected_device_id = matching_devices[0]
                     if len(matching_devices) > 1:
                         print(
                             f"Note: Address '{address}' matches multiple devices. Using first match: {matching_devices[0]}"
@@ -726,6 +750,7 @@ def view(stream_name=None, address=None, window_duration=10.0, **kwargs):
             else:
                 # Single device, use it
                 found_names = device_streams[detected_devices[0]]
+                selected_device_id = detected_devices[0]
 
     if not found_names:
         print("No Muse streams found. Is 'OpenMuse stream' running?")
@@ -747,6 +772,8 @@ def view(stream_name=None, address=None, window_duration=10.0, **kwargs):
 
     # Instantiate viewer
     v = RealtimeViewer(streams, window_duration=window_duration, **kwargs)
+    v.device_id = selected_device_id
+    v.lbl_device.text = f"Device: {selected_device_id}"
     v.show()
 
     try:
