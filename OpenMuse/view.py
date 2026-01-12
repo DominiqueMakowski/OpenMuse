@@ -303,7 +303,7 @@ class RealtimeViewer:
         usable_width = 1.0 - margin_left - margin_right
 
         # Place labels slightly below plot
-        y_norm = 1.0 - margin_bottom + 0.0275
+        y_norm = 1.0 - margin_bottom + 0.025
 
         # Font scaling
         BASE_FONT_TIME = 7
