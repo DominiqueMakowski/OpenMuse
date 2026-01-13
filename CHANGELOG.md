@@ -20,6 +20,7 @@
   - Movement of battery display to top-left (from top-right)
   - Tick values, time axis, channel labels, and battery indicator now appropriately scale with window size
   - Position of channel labels, tick values, and grid lines altered for readability
+  - New header added above plot area containing idiosyncratic device MAC address
 - **Stream Naming Convention**: Updated LSL stream names to include device identifiers for better multi-device support.
   - Muse: `Muse-{sensor_type} ({device_id})` (e.g., `Muse-EEG (0055DA)`)
   - BITalino: `BITalino ({address})` (e.g., `BITalino (20:17:09:18:49:99)`)
