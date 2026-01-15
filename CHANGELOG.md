@@ -1,7 +1,6 @@
 # Changelog
 
 
-
 ## [0.1.8]
 
 ### Added
@@ -10,6 +9,9 @@
 - **Stream selection**: Added the --sensors flag to select what sensors to stream. `OpenMuse stream <device> --sensors EEG OPTICS` (should just stream EEG and OPTICS).
 
 ### Changed
+- **Battery Sampling Rate**: Updated battery sampling rate from 1.0 Hz to 0.2 Hz to reflect actual new firmware behavior (0x88 packets arrive ~every 5 seconds).
+- **Documentation**: Updated `decode.py` docstring to accurately describe `pkt_index` behavior - provides 100% correct temporal ordering but indices may have gaps (not strictly sequential).
+- **Streaming Stability**: Added channel count validation in `_queue_samples()` to prevent `ValueError: dimension mismatch` crashes when transitioning between different sensor configurations (e.g., 8-channel vs 4-channel EEG modes).
 - **Default Clock Model**: Changed default clock synchronization from `adaptive` to `windowed`. Validation testing showed `windowed` provides the most stable timing across different devices (based on internal controlled testing). See `clocks.py` docstring for full validation results.
 - **Improved Multi-Device Viewer Behavior**: When multiple Muse devices are streaming, the `view` command now automatically displays only the first device and shows a warning message listing all detected devices. Users can specify which device to view using the `--address` argument. This prevents the confusing behavior where all channels from all devices were mixed in a single viewer window.
 - **0x88 Packet Support**: Added handling for new 0x88 packet type found in newer firmware. Contains embedded battery info and ~200 bytes of unknown data (possibly processed signals).

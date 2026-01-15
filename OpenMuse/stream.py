@@ -109,7 +109,7 @@ Four LSL streams are created:
 - Muse_EEG: 8 channels at 256 Hz (EEG + AUX)
 - Muse_ACCGYRO: 6 channels at 52 Hz (accelerometer + gyroscope)
 - Muse_OPTICS: 16 channels at 64 Hz (PPG sensors)
-- Muse_BATTERY: 1 channel at 1 Hz (battery percentage)
+- Muse_BATTERY: 1 channel at 0.2 Hz (battery percentage, new firmware)
 
 Each stream includes:
 - Channel labels (from decode.py)
@@ -218,7 +218,7 @@ def create_stream_outlet(
         source_id = f"{device_id}_optics"
     elif sensor_type == "BATTERY":
         ch_names = list(BATTERY_CHANNELS)
-        sfreq = 1.0
+        sfreq = 0.2  # New firmware sends battery every 5 seconds
         stype = "Battery"
         source_id = f"{device_id}_battery"
     else:
@@ -289,6 +289,18 @@ async def _stream_async(
         # Extract device timestamps
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
+
+        # --- Validate Channel Count ---
+        # This guards against mixing packets with different channel counts
+        # (e.g., 0x11 EEG4 with 4 channels vs 0x12 EEG8 with 8 channels)
+        expected_channels = stream.outlet.n_channels
+        if samples.shape[1] != expected_channels:
+            if verbose:
+                print(
+                    f"[{sensor_type}] Skipping packet with mismatched channel count: "
+                    f"got {samples.shape[1]}, expected {expected_channels}"
+                )
+            return
 
         # --- Update Clock Model ---
         # We update the clock using the *latest* packet in this chunk

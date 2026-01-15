@@ -22,18 +22,20 @@ MESSAGE (BLE transmission with timestamp)
 Timestamp Calculation & Device Timing:
 ---------------------------------------
 Device timestamps (pkt_time) are derived from a 256 kHz hardware clock with 3.906 µs resolution.
-Multiple packets often share identical pkt_time values (~11-30% are duplicates).
+Multiple packets often share identical pkt_time values (~99% of packets are in duplicate groups).
 
 Timestamp generation per message:
   1. Sort packets by (pkt_time, pkt_index, subpkt_index)
      - pkt_index: Packet sequence counter (0-255), ensures correct ordering of duplicates
-     - Analysis: 100% sequential in duplicate groups (1871/1871 tested)
+     - Analysis: pkt_index provides 100% correct temporal ORDERING within duplicate groups,
+       though indices may have gaps (not strictly consecutive, as some packets arrive with
+       different timestamps). The arrival order always matches pkt_index order.
   2. Use first packet's pkt_time as anchor
   3. Generate uniform timestamps: anchor + (sample_index / sampling_rate)
 
 Hardware Timing Artifacts:
-  - ~4% of pkt_time values have timing inversions (timestamps go backwards)
-  - pkt_index remains sequential (100% accurate for packet order)
+  - ~3-4% of pkt_time values have timing inversions (timestamps go backwards)
+  - pkt_index provides correct ordering (100% accurate for packet sequencing)
   - Inversions likely due to async sensor buffering and clock jitter
   - Final monotonicity ensured by stream.py buffering/sorting before LSL output
 
