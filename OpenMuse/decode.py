@@ -22,18 +22,20 @@ MESSAGE (BLE transmission with timestamp)
 Timestamp Calculation & Device Timing:
 ---------------------------------------
 Device timestamps (pkt_time) are derived from a 256 kHz hardware clock with 3.906 µs resolution.
-Multiple packets often share identical pkt_time values (~11-30% are duplicates).
+Multiple packets often share identical pkt_time values (~99% of packets are in duplicate groups).
 
 Timestamp generation per message:
   1. Sort packets by (pkt_time, pkt_index, subpkt_index)
      - pkt_index: Packet sequence counter (0-255), ensures correct ordering of duplicates
-     - Analysis: 100% sequential in duplicate groups (1871/1871 tested)
+     - Analysis: pkt_index provides 100% correct temporal ORDERING within duplicate groups,
+       though indices may have gaps (not strictly consecutive, as some packets arrive with
+       different timestamps). The arrival order always matches pkt_index order.
   2. Use first packet's pkt_time as anchor
   3. Generate uniform timestamps: anchor + (sample_index / sampling_rate)
 
 Hardware Timing Artifacts:
-  - ~4% of pkt_time values have timing inversions (timestamps go backwards)
-  - pkt_index remains sequential (100% accurate for packet order)
+  - ~3-4% of pkt_time values have timing inversions (timestamps go backwards)
+  - pkt_index provides correct ordering (100% accurate for packet sequencing)
   - Inversions likely due to async sensor buffering and clock jitter
   - Final monotonicity ensured by stream.py buffering/sorting before LSL output
 
@@ -103,6 +105,18 @@ SENSORS = {
         "n_samples": 0,
         "rate": 0.0,
         "data_len": 24,
+    },
+    # 0x88: New firmware battery/status packet
+    # Contains battery percentage in first 2 bytes, plus additional unknown data
+    # Battery is extracted from this packet for new firmware (replaces 0x98)
+    # NOTE: data_len is set to minimum observed (196 bytes) but actual packets
+    # vary from 188-230 bytes. The decoder only reads first 2 bytes for battery.
+    0x88: {
+        "type": "BATTERY",
+        "n_channels": 1,
+        "n_samples": 1,
+        "rate": 0.2,  # ~1 packet every 5-6 seconds (variable)
+        "data_len": 188,  # Minimum observed; actual packets vary 188-230 bytes
     },
     0x98: {
         "type": "BATTERY",
@@ -305,9 +319,11 @@ def _parse_packets(payload: bytes, message_time: datetime, uuid: str) -> List[Di
         pkt_type = pkt_config["type"] if pkt_config else None
 
         # Validate packet
+        # Note: byte_13 is NOT always 0 in newer firmware versions.
+        # It appears to be a sequence counter or metadata field.
+        # Removed byte_13 == 0 check for compatibility with new firmware.
         pkt_valid = (
             pkt_type is not None
-            and byte_13 == 0
             and pkt_len == len(pkt_bytes)
             and pkt_len >= PACKET_HEADER_SIZE
         )
@@ -509,6 +525,10 @@ def _decode_accgyro_data(data_bytes: bytes) -> Optional[np.ndarray]:
 def _decode_battery_data(data_bytes: bytes) -> Optional[np.ndarray]:
     """
     Decode Battery data (first 2 bytes = SOC).
+
+    Works for both:
+    - 0x98 packets (old firmware): ~20 bytes, battery in first 2 bytes
+    - 0x88 packets (new firmware): 188-230 bytes, battery in first 2 bytes
 
     Returns: np.ndarray shape (1,) with battery percentage
     """

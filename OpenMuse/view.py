@@ -48,14 +48,15 @@ void main() {
 
     // Y position (Stacking)
     float margin_bottom = 0.05;
-    float plot_height = 1.0 - margin_bottom;
+    float margin_top = 0.03;
+    float plot_height = 1.0 - margin_bottom - margin_top;
 
     float slot_height = plot_height / u_size.x;
     float slot_bottom = margin_bottom + (channel_idx * slot_height);
     float slot_center = slot_bottom + (slot_height * 0.5);
 
-    // Scale: 0.45 leaves 10% padding between channels
-    float y = slot_center + (a_position * slot_height * 0.45 * a_y_scale);
+    // Scale: 0.30
+    float y = slot_center + (a_position * slot_height * 0.30 * a_y_scale);
 
     gl_Position = u_projection * vec4(x * u_scale.x, y, 0.0, 1.0);
     v_color = vec4(a_color, 1.0);
@@ -123,6 +124,14 @@ class RealtimeViewer:
                     col = color_opt
                     rng = 1000.0
 
+                # Determine sort order: EEG=0, ACCGYRO=1, OPTICS=2
+                if is_eeg:
+                    sort_order = 0
+                elif "ACC" in ch_name or "GYRO" in ch_name:
+                    sort_order = 1
+                else:
+                    sort_order = 2
+
                 self.channel_info.append(
                     {
                         "stream_idx": s_idx,
@@ -132,12 +141,20 @@ class RealtimeViewer:
                         "range": rng,  # Full span (Top - Bottom)
                         "scale": 1.0,
                         "is_eeg": is_eeg,
-                        "data_idx": self.total_channels,
+                        "sort_order": sort_order,
                         "dc_offset": 0.0,
                         "quality_buf": [],
                     }
                 )
-                self.total_channels += 1
+
+        # Sort channels for consistent display order: EEG at top, then ACCGYRO, then OPTICS at bottom
+        # Lower sort_order appears at TOP of display (higher data_idx)
+        self.channel_info.sort(key=lambda c: (c["sort_order"], c["name"]), reverse=True)
+
+        # Assign data_idx after sorting
+        for idx, ch in enumerate(self.channel_info):
+            ch["data_idx"] = idx
+            self.total_channels = idx + 1
 
         self.master_sfreq = max_sfreq
         self.n_samples = int(self.window_duration * self.master_sfreq)
@@ -264,12 +281,58 @@ class RealtimeViewer:
             anchor_y="top",
         )
 
+        # Device MAC address – Anchor top center
+        self.lbl_device = TextVisual(
+            f"Device: {getattr(self, 'device_id', '')}",
+            color="gray",
+            font_size=8,
+            bold=True,
+            anchor_x="center",
+            anchor_y="top",
+        )
+
+    def _update_time_labels(self):
+        w, h = self.canvas.size
+
+        # --- Plot margins (must match shader) ---
+        margin_left = 0.12
+        margin_right = 0.05
+        margin_bottom = 0.05
+
+        n_ticks = len(self.lbl_time)
+        usable_width = 1.0 - margin_left - margin_right
+
+        # Place labels slightly below plot
+        y_norm = 1.0 - margin_bottom + 0.025
+
+        # Font scaling
+        BASE_FONT_TIME = 7
+        scale_factor = min(w / 1400, h / 900)
+
+        for i, t in enumerate(self.lbl_time):
+            x_norm = margin_left + (i / (n_ticks - 1)) * usable_width
+
+            # Convert normalized → pixel
+            t.pos = (x_norm * w, y_norm * h)
+
+            # Font scaling
+            t.font_size = max(4, int(BASE_FONT_TIME * scale_factor))
+
+            # Label text
+            time_val = self.window_duration * (1 - i / (n_ticks - 1))
+            t.text = (
+                f"-{time_val:.1f}s".replace(".0s", "s")
+                if time_val < 10
+                else f"-{int(time_val)}s"
+            )
+
     def _init_grid_lines(self):
         limit_pts = []
         zero_pts = []
 
         margin_bottom = 0.05
-        h_plot = 1.0 - margin_bottom
+        margin_top = 0.03
+        h_plot = 1.0 - margin_bottom - margin_top
         margin_left = 0.12
         margin_right = 0.05
 
@@ -278,8 +341,8 @@ class RealtimeViewer:
             y_base = margin_bottom + (i * slot_h)
             y_center = y_base + (slot_h * 0.5)
 
-            y_top = y_center + (slot_h * 0.45)
-            y_bot = y_center - (slot_h * 0.45)
+            y_top = y_center + (slot_h * 0.30)
+            y_bot = y_center - (slot_h * 0.30)
 
             x1, x2 = margin_left, 1.0 - margin_right
 
@@ -406,17 +469,45 @@ class RealtimeViewer:
 
         w, h = self.canvas.size
         margin_bottom = 0.05
-        h_plot = 1.0 - margin_bottom
+        margin_top = 0.03
+        h_plot = 1.0 - margin_bottom - margin_top
+
+        # Base font sizes
+        BASE_FONT_NAME = 8
+        BASE_FONT_QUAL = 7
+        BASE_FONT_TICK = 4
+        BASE_FONT_BAT = 10
+
+        # Scale factor relative to canvas size
+        scale_factor = min(w / 1400, h / 900)
 
         # Update Battery Label Text
+        # Only show battery if we have a battery stream AND have received data
         if self.battery_level is not None:
             self.lbl_bat.text = f"{self.battery_level:.0f}%"
-            if self.battery_level > 50:
-                self.lbl_bat.color = "lime"
-            elif self.battery_level > 20:
+            if self.battery_level > 80:
+                self.lbl_bat.color = "green"
+            elif self.battery_level > 60:
+                self.lbl_bat.color = "yellowgreen"
+            elif self.battery_level > 40:
                 self.lbl_bat.color = "yellow"
+            elif self.battery_level > 20:
+                self.lbl_bat.color = "orangered"
             else:
                 self.lbl_bat.color = "red"
+        elif self.battery_stream_idx is None:
+            # No battery stream available - hide the label
+            self.lbl_bat.text = ""
+
+        self.lbl_bat.font_size = max(4, int(BASE_FONT_BAT * scale_factor))
+        margin_norm_x = 0.96
+        margin_norm_y = 0.035
+        self.lbl_bat.pos = ((1.0 - margin_norm_x) * w, margin_norm_y * h)
+
+        # Shader margins for left/right
+        shader_margin_left = 0.12
+        label_offset = 0.03
+        tick_offset = 0.005
 
         for ch in self.channel_info:
             # Channel slot geometry in pixels
@@ -426,13 +517,21 @@ class RealtimeViewer:
 
             # Convert to Vispy coordinates (origin top-left)
             y_px_center = h * (1.0 - y_rel_center)
+            padding_factor = 0.30
+            y_px_top = h * (1.0 - (y_rel_center + slot_h_rel * padding_factor))
+            y_px_bot = h * (1.0 - (y_rel_center - slot_h_rel * padding_factor))
 
             # Name
-            self.lbl_names[ch["data_idx"]].pos = (w * 0.11, y_px_center)
+            label_x = w * (shader_margin_left - label_offset)
+            label_x = np.clip(label_x, 2, w - 2)
+            lbl_name = self.lbl_names[ch["data_idx"]]
+            lbl_name.pos = (label_x, y_px_center)
+            lbl_name.font_size = max(4, int(BASE_FONT_NAME * scale_factor))
 
             # Quality
             lbl_q = self.lbl_qual[ch["data_idx"]]
             lbl_q.pos = (w * 0.96, y_px_center)
+            lbl_q.font_size = max(4, int(BASE_FONT_QUAL * scale_factor))
             if ch["is_eeg"] and len(ch["quality_buf"]) > 50:
                 imp = np.std(ch["quality_buf"])
                 lbl_q.text = f"σ:{imp:.0f}"
@@ -445,19 +544,20 @@ class RealtimeViewer:
                 lbl_q.text = ""
 
             # Ticks
+            tick_x = w * (shader_margin_left - tick_offset)
+            tick_x = np.clip(tick_x, 2, w - 2)
             val_top = ch["range"] / 2.0
             val_bot = -ch["range"] / 2.0
-
-            y_px_top = h * (1.0 - (y_rel_center + (slot_h_rel * 0.45)))
-            y_px_bot = h * (1.0 - (y_rel_center - (slot_h_rel * 0.45)))
-
             ticks = self.lbl_ticks[ch["data_idx"]]
             ticks[0].text = f"{val_top:.0f}" if abs(val_top) >= 10 else f"{val_top:.1f}"
-            ticks[0].pos = (w * 0.115, y_px_top)
+            ticks[0].pos = (tick_x, y_px_top)
+            ticks[0].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
             ticks[1].text = "0"
-            ticks[1].pos = (w * 0.115, y_px_center)
+            ticks[1].pos = (tick_x, y_px_center)
+            ticks[1].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
             ticks[2].text = f"{val_bot:.0f}" if abs(val_bot) >= 10 else f"{val_bot:.1f}"
-            ticks[2].pos = (w * 0.115, y_px_bot)
+            ticks[2].pos = (tick_x, y_px_bot)
+            ticks[2].font_size = max(4, int(BASE_FONT_TICK * scale_factor))
 
     def on_draw(self, event):
         gloo.clear(color=(0.1, 0.1, 0.1, 1.0))
@@ -476,7 +576,7 @@ class RealtimeViewer:
         self.program.draw("lines", indices=self.index_buffer)
 
         # 3. Text Labels
-        for t in self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]:
+        for t in self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat, self.lbl_device]:
             t.draw()
         for group in self.lbl_ticks:
             for t in group:
@@ -486,24 +586,24 @@ class RealtimeViewer:
         w, h = event.size
         gloo.set_viewport(0, 0, w, h)
 
+        # Device label position
+        top_margin = 0.0225
+        self.lbl_device.pos = (w * 0.5, top_margin * h)
+
+        # Font scaling relative to canvas
+        BASE_FONT_DEVICE = 8
+        scale_factor = min(w / 1400, h / 900)
+        self.lbl_device.font_size = int(BASE_FONT_DEVICE * scale_factor)
+
         # Update text transforms
-        all_labels = self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat]
+        all_labels = self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat, self.lbl_device]
         for group in self.lbl_ticks:
             all_labels.extend(group)
 
         for t in all_labels:
             t.transforms.configure(canvas=self.canvas, viewport=(0, 0, w, h))
 
-        # Position Time Axis
-        for i, t in enumerate(self.lbl_time):
-            x = w * (0.12 + (i / 5) * (0.83))
-            t.pos = (x, h - 5)
-
-        # Position Battery Text (Top Right)
-        # Margin from edges
-        margin_x = 20
-        margin_y = 20
-        self.lbl_bat.pos = (w - margin_x, margin_y)
+        self._update_time_labels()
 
     def on_mouse_wheel(self, event):
         delta = event.delta[1] if hasattr(event.delta, "__getitem__") else event.delta
@@ -556,19 +656,107 @@ class RealtimeViewer:
                 print("Viewer closed.")
 
 
-def view(stream_name=None, window_duration=10.0, **kwargs):
+def view(stream_name=None, address=None, window_duration=10.0, **kwargs):
+    """View LSL streams in real-time.
+
+    Args:
+        stream_name: Name (or substring) of specific LSL stream to visualize.
+        address: MAC address to filter streams by. If provided, only streams
+                 containing this address in their name will be shown.
+                 Useful when multiple Muse devices are streaming.
+        window_duration: Time window to display in seconds.
+    """
     configure_lsl_api_cfg()
     from mne_lsl.stream import StreamLSL
+    from mne_lsl.lsl import resolve_streams
 
     print("Connecting to Streams...")
     streams = []
 
-    # Auto-detect including battery
-    targets = ["Muse_EEG", "Muse_ACCGYRO", "Muse_OPTICS", "Muse_BATTERY"]
-    if stream_name:
-        targets = [stream_name]
+    # Resolve all available streams
+    print("Scanning for available LSL streams...")
+    infos = resolve_streams()
+    found_names = []
 
-    for name in targets:
+    if stream_name:
+        # If a specific name is requested, try to find it exactly or as a substring
+        for info in infos:
+            if stream_name == info.name:
+                found_names.append(info.name)
+
+        # If not found exactly, try substring match
+        if not found_names:
+            for info in infos:
+                if stream_name in info.name:
+                    found_names.append(info.name)
+
+        # If still not found, maybe the user provided the full name but resolve_streams missed it (rare)
+        if not found_names:
+            # Fallback: try to connect to it directly (maybe it wasn't resolved yet)
+            found_names = [stream_name]
+    else:
+        # Auto-detect Muse streams (format: Muse-TYPE (DEVICE_ID))
+        # Collect streams by device address
+        device_streams = {}
+
+        for info in infos:
+            n = info.name
+            if "Muse" in n:
+                if any(t in n for t in ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]):
+                    # Extract device ID from stream name (e.g., "Muse-EEG (00:55:DA:B9:FA:20)")
+                    if "(" in n and ")" in n:
+                        device_id = n.split("(")[-1].split(")")[0].strip()
+                    else:
+                        device_id = "unknown"
+
+                    if device_id not in device_streams:
+                        device_streams[device_id] = []
+                    device_streams[device_id].append(n)
+
+        # Check if multiple devices detected
+        detected_devices = list(device_streams.keys())
+
+        if len(detected_devices) > 1 and address is None:
+            print("\n⚠ WARNING: Multiple Muse devices detected!")
+            print("The following devices are streaming:")
+            for i, device_id in enumerate(detected_devices, 1):
+                print(f"  {i}. {device_id}")
+            print(
+                "To view a specific device, open separate terminals and use the --address argument:"
+            )
+            print(f"  Example: OpenMuse view --address {detected_devices[0]}")
+            print("\nProceeding to display streams from the first device only...")
+            print(f"Selected device: {detected_devices[0]}\n")
+
+            # Use only the first device's streams
+            found_names = device_streams[detected_devices[0]]
+            selected_device_id = detected_devices[0]
+        elif detected_devices:
+            # Single device or address filter specified
+            if address:
+                # Filter by address
+                matching_devices = [d for d in detected_devices if address in d]
+                if matching_devices:
+                    found_names = device_streams[matching_devices[0]]
+                    selected_device_id = matching_devices[0]
+                    if len(matching_devices) > 1:
+                        print(
+                            f"Note: Address '{address}' matches multiple devices. Using first match: {matching_devices[0]}"
+                        )
+                else:
+                    print(f"No devices matching address '{address}' found.")
+                    print(f"Available devices: {', '.join(detected_devices)}")
+                    return
+            else:
+                # Single device, use it
+                found_names = device_streams[detected_devices[0]]
+                selected_device_id = detected_devices[0]
+
+    if not found_names:
+        print("No Muse streams found. Is 'OpenMuse stream' running?")
+        return
+
+    for name in found_names:
         try:
             bufsize = window_duration if "BATTERY" not in name else 5.0
             s = StreamLSL(bufsize=bufsize, name=name)
@@ -579,11 +767,13 @@ def view(stream_name=None, window_duration=10.0, **kwargs):
             pass
 
     if not streams:
-        print("Error: No streams found. Is 'openmuse-stream' running?")
+        print("Error: No streams found. Is 'OpenMuse stream' running?")
         return
 
     # Instantiate viewer
     v = RealtimeViewer(streams, window_duration=window_duration, **kwargs)
+    v.device_id = selected_device_id
+    v.lbl_device.text = f"Device: {selected_device_id}"
     v.show()
 
     try:

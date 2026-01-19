@@ -9,3 +9,5 @@ dist/
 .mypy_cache/
 *.log
 secret/
+validation/*.xdf
+validation/*.txt

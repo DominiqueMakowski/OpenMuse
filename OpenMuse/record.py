@@ -1,7 +1,8 @@
 import asyncio
 import os
 import time
-from typing import Iterable, Optional
+from datetime import datetime
+from typing import Iterable, List, Optional, Union
 
 import bleak
 
@@ -103,39 +104,74 @@ async def _record_async(
 
 
 def record(
-    address: str,
+    address: Union[str, List[str]],
     duration: float = 30.0,
     outfile: str = "muse_record.txt",
     preset: str = "p1041",
     verbose: bool = True,
 ) -> None:
     """
-    Connect to a Muse device, stream notifications, and append raw packets to a text file.
+    Connect to one or more Muse devices, stream notifications, and append raw packets to text file(s).
+    Supports recording from multiple devices simultaneously (e.g., for hyperscanning studies).
 
     Each line written: ISO8601 UTC timestamp, characteristic UUID, hex payload.
 
     Parameters
     - address: Device MAC address (Windows) or identifier (platform-dependent).
+               Can be a single address (str) or a list of addresses (List[str]) for multi-device recording.
     - duration: Recording duration in seconds.
-    - outfile: Path to output text file.
-    - preset: Preset string to send (e.g., "p1031" or "p21").
+    - outfile: Path to output text file. For multiple devices, device address will be appended to filename.
+    - preset: Preset string to send (e.g., "p1041" or "p21").
     - verbose: Print progress messages.
     """
-    if not address:
-        raise ValueError("address must be a non-empty string")
+    # Convert single address to list for uniform handling
+    addresses = [address] if isinstance(address, str) else address
+
+    # Remove duplicates if any
+    addresses = list(set(addresses))
+
+    if not addresses:
+        raise ValueError("address must be a non-empty string or list of strings")
     if duration <= 0:
         raise ValueError("duration must be positive")
     if not isinstance(outfile, str) or not outfile:
         raise ValueError("outfile must be a non-empty path string")
 
     chars = list(MuseS.DATA_CHARACTERISTICS)
-    return _run(
-        _record_async(
-            address=address,
-            duration=duration,
-            outfile=outfile,
-            preset=preset,
-            subscribe_chars=chars,
-            verbose=verbose,
-        )
-    )
+
+    async def run_multirecord():
+        if verbose and len(addresses) > 1:
+            print(f"Starting recording for {len(addresses)} device(s)...")
+
+        tasks = []
+        for addr in addresses:
+            # Generate unique filename for each device
+            if len(addresses) > 1:
+                # Sanitize address for filename
+                sanitized_addr = addr.replace(":", "").replace("-", "")
+
+                # Insert address into provided filename
+                if "." in outfile:
+                    parts = outfile.rsplit(".", 1)
+                    filename = f"{parts[0]}_{sanitized_addr}.{parts[1]}"
+                else:
+                    filename = f"{outfile}_{sanitized_addr}"
+            else:
+                filename = outfile
+
+            # Create task for this device
+            tasks.append(
+                _record_async(
+                    address=addr,
+                    duration=duration,
+                    outfile=filename,
+                    preset=preset,
+                    subscribe_chars=chars,
+                    verbose=verbose,
+                )
+            )
+
+        # Run all recordings concurrently
+        await asyncio.gather(*tasks)
+
+    return _run(run_multirecord())

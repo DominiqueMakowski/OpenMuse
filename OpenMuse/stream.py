@@ -109,7 +109,7 @@ Four LSL streams are created:
 - Muse_EEG: 8 channels at 256 Hz (EEG + AUX)
 - Muse_ACCGYRO: 6 channels at 52 Hz (accelerometer + gyroscope)
 - Muse_OPTICS: 16 channels at 64 Hz (PPG sensors)
-- Muse_BATTERY: 1 channel at 1 Hz (battery percentage)
+- Muse_BATTERY: 1 channel at 0.2 Hz (battery percentage, new firmware)
 
 Each stream includes:
 - Channel labels (from decode.py)
@@ -141,6 +141,13 @@ import numpy as np
 from bleak.exc import BleakError
 from mne_lsl.lsl import StreamInfo, StreamOutlet, local_clock
 
+from .clocks import (
+    AdaptiveOffsetClock,
+    ConstrainedRLSClock,
+    RobustOffsetClock,
+    StandardRLSClock,
+    WindowedRegressionClock,
+)
 from .decode import (
     ACCGYRO_CHANNELS,
     BATTERY_CHANNELS,
@@ -151,13 +158,6 @@ from .decode import (
 )
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
-from .clocks import (
-    AdaptiveOffsetClock,
-    ConstrainedRLSClock,
-    RobustOffsetClock,
-    StandardRLSClock,
-    WindowedRegressionClock,
-)
 
 MAX_BUFFER_PACKETS = 52  # ~200ms capacity for 256Hz
 FLUSH_INTERVAL = 0.2  # 200ms jitter buffer
@@ -209,7 +209,7 @@ def create_stream_outlet(
     elif sensor_type == "ACCGYRO":
         ch_names = list(ACCGYRO_CHANNELS)
         sfreq = 52.0
-        stype = "ACC_GYRO"
+        stype = "ACCGYRO"
         source_id = f"{device_id}_accgyro"
     elif sensor_type == "OPTICS":
         ch_names = select_optics_channels(n_channels)
@@ -218,14 +218,14 @@ def create_stream_outlet(
         source_id = f"{device_id}_optics"
     elif sensor_type == "BATTERY":
         ch_names = list(BATTERY_CHANNELS)
-        sfreq = 1.0
+        sfreq = 0.2  # New firmware sends battery every 5 seconds
         stype = "Battery"
         source_id = f"{device_id}_battery"
     else:
         raise ValueError(f"Unknown sensor type: {sensor_type}")
 
     info = StreamInfo(
-        name=f"Muse_{sensor_type}",
+        name=f"Muse-{sensor_type} ({device_id})",
         stype=stype,
         n_channels=len(ch_names),
         sfreq=sfreq,
@@ -250,9 +250,24 @@ async def _stream_async(
     duration: Optional[float] = None,
     raw_data_file: Optional[TextIO] = None,
     verbose: bool = True,
-    clock_model: str = "adaptive",
+    clock_model: str = "windowed",
+    sensors: Optional[List[str]] = None,
 ):
-    """Asynchronous context for BLE connection and LSL streaming."""
+    """Asynchronous context for BLE connection and LSL streaming.
+
+    Parameters
+    ----------
+    sensors : Optional[List[str]]
+        List of sensor types to stream. If None, streams all sensors.
+        Valid values: "EEG", "ACCGYRO", "OPTICS", "BATTERY"
+    """
+
+    # Default to all sensors if not specified
+    if sensors is None:
+        sensors = ["EEG", "ACCGYRO", "OPTICS", "BATTERY"]
+    else:
+        # Normalize to uppercase
+        sensors = [s.upper() for s in sensors]
 
     # --- Stream State ---
     streams: Dict[str, SensorStream] = {}
@@ -274,6 +289,18 @@ async def _stream_async(
         # Extract device timestamps
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
+
+        # --- Validate Channel Count ---
+        # This guards against mixing packets with different channel counts
+        # (e.g., 0x11 EEG4 with 4 channels vs 0x12 EEG8 with 8 channels)
+        expected_channels = stream.outlet.n_channels
+        if samples.shape[1] != expected_channels:
+            if verbose:
+                print(
+                    f"[{sensor_type}] Skipping packet with mismatched channel count: "
+                    f"got {samples.shape[1]}, expected {expected_channels}"
+                )
+            return
 
         # --- Update Clock Model ---
         # We update the clock using the *latest* packet in this chunk
@@ -348,9 +375,9 @@ async def _stream_async(
         subpackets = parse_message(message)
         decoded: Dict[str, np.ndarray] = {}
 
-        # Ensure streams exist
+        # Ensure streams exist (only for requested sensor types)
         for sensor_type, pkt_list in subpackets.items():
-            if pkt_list and sensor_type not in streams:
+            if pkt_list and sensor_type not in streams and sensor_type in sensors:
                 n_channels = pkt_list[0].get("n_channels")
                 if n_channels:
                     streams[sensor_type] = create_stream_outlet(
@@ -401,6 +428,7 @@ async def _stream_async(
     async with bleak.BleakClient(address, timeout=15.0) as client:
         if verbose:
             print(f"Connected. Device: {client.name}")
+            print(f"Streaming sensors: {', '.join(sensors)}")
 
         start_time = time.monotonic()
         data_callbacks = {uuid: _on_data for uuid in MuseS.DATA_CHARACTERISTICS}
@@ -424,35 +452,83 @@ async def _stream_async(
 
 
 def stream(
-    address: str,
+    address: Union[str, List[str]],
     preset: str = "p1041",
     duration: Optional[float] = None,
     record: Union[bool, str] = False,
     verbose: bool = True,
-    clock: str = "adaptive",
+    clock: str = "windowed",
+    sensors: Optional[List[str]] = None,
 ) -> None:
     """
     Stream decoded EEG and accelerometer/gyroscope data over LSL.
+    Supports streaming from a single device (str) or multiple devices (List[str]) in parallel.
+
+    When streaming multiple devices, if `record` is a string (filename), the device address
+    will be appended to the filename to avoid collisions.
+
+    Parameters
+    ----------
+    sensors : Optional[List[str]]
+        List of sensor types to stream. If None, streams all sensors (EEG, ACCGYRO, OPTICS, BATTERY).
+        Valid values: \"EEG\", \"ACCGYRO\", \"OPTICS\", \"BATTERY\".
     """
     configure_lsl_api_cfg()
 
-    raw_data_file = None
-    file_handle = None
-    if record:
-        if isinstance(record, str):
-            filename = record
-        else:
-            filename = f"rawdata_stream_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        try:
-            file_handle = open(filename, "w", encoding="utf-8")
-            raw_data_file = file_handle
-        except IOError as e:
-            print(f"Warning: Could not open file for recording: {e}")
+    addresses = [address] if isinstance(address, str) else address
+    # Remove duplicates if any
+    addresses = list(set(addresses))
+
+    tasks = []
+    file_handles = []
+
+    async def run_multistream():
+        if verbose:
+            print(f"Starting stream for {len(addresses)} device(s)...")
+
+        for addr in addresses:
+            raw_data_file = None
+            if record:
+                # Generate unique filename for this device
+                # Sanitize address for filename
+                sanitized_addr = addr.replace(":", "").replace("-", "")
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+                if isinstance(record, str):
+                    if len(addresses) > 1:
+                        # Insert address into provided filename
+                        if "." in record:
+                            parts = record.rsplit(".", 1)
+                            filename = f"{parts[0]}_{sanitized_addr}.{parts[1]}"
+                        else:
+                            filename = f"{record}_{sanitized_addr}"
+                    else:
+                        filename = record
+                else:
+                    # Default filename format
+                    filename = f"rawdata_stream_{sanitized_addr}_{timestamp}.txt"
+
+                try:
+                    f = open(filename, "w", encoding="utf-8")
+                    file_handles.append(f)
+                    raw_data_file = f
+                    if verbose:
+                        print(f"Recording raw data for {addr} to {filename}")
+                except IOError as e:
+                    print(f"Warning: Could not open file for recording {addr}: {e}")
+
+            # Create task for this device
+            tasks.append(
+                _stream_async(
+                    addr, preset, duration, raw_data_file, verbose, clock, sensors
+                )
+            )
+
+        # Run all streams concurrently
+        await asyncio.gather(*tasks)
 
     try:
-        asyncio.run(
-            _stream_async(address, preset, duration, raw_data_file, verbose, clock)
-        )
+        asyncio.run(run_multistream())
     except KeyboardInterrupt:
         if verbose:
             print("Streaming stopped by user.")
@@ -461,5 +537,8 @@ def stream(
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
     finally:
-        if file_handle:
-            file_handle.close()
+        for f in file_handles:
+            try:
+                f.close()
+            except Exception:
+                pass

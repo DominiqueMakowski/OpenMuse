@@ -34,7 +34,10 @@ def main(argv=None):
         "record", help="Connect and record raw packets to a text file"
     )
     p_rec.add_argument(
-        "--address", required=True, help="Device address (e.g., MAC on Windows)"
+        "--address",
+        required=True,
+        nargs="+",
+        help="Device address(es) (e.g., MAC on Windows). Pass multiple space-separated addresses for multi-device recording.",
     )
     p_rec.add_argument(
         "--duration",
@@ -44,7 +47,10 @@ def main(argv=None):
         help="Recording duration in seconds (default: 30)",
     )
     p_rec.add_argument(
-        "--outfile", "-o", default="muse_record.txt", help="Output text file path"
+        "--outfile",
+        "-o",
+        default="muse_record.txt",
+        help="Output text file path (for multi-device, address will be appended)",
     )
     p_rec.add_argument(
         "--preset", default="p1041", help="Preset to send (by default, p1041)"
@@ -72,7 +78,8 @@ def main(argv=None):
     p_stream.add_argument(
         "--address",
         required=True,
-        help="Device address (e.g., MAC on Windows)",
+        nargs="+",
+        help="Device address(es) (e.g., MAC on Windows). Pass multiple space-separated addresses for multi-device streaming.",
     )
     p_stream.add_argument(
         "--preset",
@@ -101,9 +108,16 @@ def main(argv=None):
     )
     p_stream.add_argument(
         "--clock",
-        default="adaptive",
+        default="windowed",
         choices=["adaptive", "constrained", "robust", "standard", "windowed"],
-        help="Clock synchronization model (default: adaptive)",
+        help="Clock synchronization model (default: windowed)",
+    )
+    p_stream.add_argument(
+        "--sensors",
+        nargs="+",
+        default=None,
+        choices=["EEG", "ACCGYRO", "OPTICS", "BATTERY"],
+        help="Sensor types to stream (default: all). Example: --sensors EEG OPTICS",
     )
 
     def handle_stream(ns):
@@ -118,6 +132,7 @@ def main(argv=None):
             record=ns.record,  # 'outfile' parameter removed
             verbose=True,
             clock=ns.clock,
+            sensors=ns.sensors,
         )
         return 0
 
@@ -129,9 +144,15 @@ def main(argv=None):
         help="Visualize EEG and ACC/GYRO data from LSL streams in real-time",
     )
     p_view.add_argument(
+        "--address",
+        default=None,
+        help="MAC address to filter streams by (e.g., 00:55:DA:B9:73:D5). "
+        "Only streams from this device will be shown. Useful with multiple devices.",
+    )
+    p_view.add_argument(
         "--stream-name",
         default=None,
-        help="Name of specific LSL stream to visualize (default: None = show all available streams: Muse_EEG + Muse_ACCGYRO)",
+        help="Name (or substring) of specific LSL stream to visualize (default: None = auto-detect Muse streams)",
     )
     p_view.add_argument(
         "--window",
@@ -149,6 +170,7 @@ def main(argv=None):
 
         view(
             stream_name=ns.stream_name,
+            address=ns.address,
             window_duration=ns.window,
             verbose=True,
         )
@@ -221,7 +243,7 @@ def main(argv=None):
     p_view_bitalino.add_argument(
         "--stream-name",
         default="BITalino",
-        help="Name of the LSL stream to visualize (default: BITalino)",
+        help="Name (or substring) of the LSL stream to visualize (default: BITalino)",
     )
     p_view_bitalino.add_argument(
         "--window",

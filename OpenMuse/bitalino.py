@@ -27,7 +27,6 @@ from mne_lsl.stream import StreamLSL
 from .backends import BleakBackend
 from .clocks import ConstrainedRLSClock
 from .utils import configure_lsl_api_cfg
-from .view import RealtimeViewer
 
 
 # ============================================================================
@@ -329,7 +328,7 @@ async def stream_bitalino(
     n_channels_lsl = len(channel_names)
 
     info = StreamInfo(
-        name="BITalino",
+        name=f"BITalino ({address})",
         stype="BioSignals",
         n_channels=n_channels_lsl,
         sfreq=float(sampling_rate),
@@ -455,12 +454,24 @@ async def stream_bitalino(
 # ============================================================================
 # BITALINO VIEWER
 # ============================================================================
-class BitalinoViewer(RealtimeViewer):
+class BitalinoViewer:
     """
     Subclass of RealtimeViewer adapted for BITalino.
     Overrides channel setup to filter for Analog (A1-A6) channels
     and sets appropriate 10-bit ranges.
     """
+
+    def __new__(cls, *args, **kwargs):
+        from .view import RealtimeViewer
+
+        # Dynamically inherit from RealtimeViewer to avoid top-level import
+        if RealtimeViewer not in cls.__bases__:
+            cls.__bases__ = (RealtimeViewer,)
+        return super(BitalinoViewer, cls).__new__(cls)
+
+    def __init__(self, *args, **kwargs):
+        # Ensure parent init is called
+        super().__init__(*args, **kwargs)
 
     def _setup_channels(self):
         self.ch_configs = []
@@ -515,11 +526,38 @@ def view_bitalino(stream_name="BITalino", window_duration=10.0):
     Connects to a BITalino LSL stream and opens the viewer.
     """
     configure_lsl_api_cfg()
+    from mne_lsl.lsl import resolve_streams
 
-    print(f"Looking for LSL stream: '{stream_name}'...")
+    print(f"Looking for LSL stream matching: '{stream_name}'...")
+
+    # Resolve streams to find the full name (e.g. BITalino-AA:BB:CC...)
+    infos = resolve_streams()
+    target_name = None
+
+    # 1. Exact match
+    for info in infos:
+        if info.name == stream_name:
+            target_name = info.name
+            break
+
+    # 2. Substring match (if default "BITalino" is used, it matches "BITalino-AA:BB...")
+    if not target_name:
+        for info in infos:
+            if stream_name in info.name:
+                target_name = info.name
+                break
+
+    if target_name:
+        print(f"Found stream: {target_name}")
+    else:
+        target_name = stream_name
+        print(
+            f"Stream matching '{stream_name}' not found in resolve. Trying direct connection..."
+        )
+
     try:
         # bufsize defines the internal buffer of the StreamLSL object
-        s = StreamLSL(bufsize=window_duration, name=stream_name)
+        s = StreamLSL(bufsize=window_duration, name=target_name)
         s.connect(timeout=5.0)
     except Exception as e:
         print(f"Error: Could not connect to stream '{stream_name}'.")
@@ -529,5 +567,7 @@ def view_bitalino(stream_name="BITalino", window_duration=10.0):
     print(f"Connected to {s.info['n_channels']} channels.")
 
     # Instantiate the specialized viewer
+    from .view import RealtimeViewer
+
     v = BitalinoViewer([s], window_duration=window_duration)
     v.show()
