@@ -171,6 +171,11 @@ class RealtimeViewer:
         self.write_ptr = 0
         self.last_timestamps = {i: 0.0 for i in range(len(streams))}
 
+        # Track when we last received data (for "no data" warning)
+        self.last_data_time = time.time()
+        self.no_data_warning = False
+        self.NO_DATA_TIMEOUT = 3.0  # seconds without data to trigger warning
+
         # --- 3. VisPy Setup ---
         self.canvas = app.Canvas(
             title="OpenMuse Realtime", keys="interactive", size=(1400, 900)
@@ -281,6 +286,16 @@ class RealtimeViewer:
             anchor_y="top",
         )
 
+        # No-data warning label - Center of screen
+        self.lbl_no_data = TextVisual(
+            "⚠ NO DATA RECEIVED",
+            color="red",
+            font_size=16,
+            bold=True,
+            anchor_x="center",
+            anchor_y="center",
+        )
+
         # Device MAC address – Anchor top center
         self.lbl_device = TextVisual(
             f"Device: {getattr(self, 'device_id', '')}",
@@ -375,7 +390,15 @@ class RealtimeViewer:
             return
 
         if len(ts_m) == 0:
+            # Check for no-data timeout
+            if time.time() - self.last_data_time > self.NO_DATA_TIMEOUT:
+                self.no_data_warning = True
+                self.canvas.update()  # Force redraw to show warning
             return
+
+        # Data received - reset no-data warning
+        self.last_data_time = time.time()
+        self.no_data_warning = False
 
         last_t = self.last_timestamps[self.master_stream_idx]
         new_mask = ts_m > last_t
@@ -576,11 +599,20 @@ class RealtimeViewer:
         self.program.draw("lines", indices=self.index_buffer)
 
         # 3. Text Labels
-        for t in self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat, self.lbl_device]:
+        for t in (
+            self.lbl_names
+            + self.lbl_qual
+            + self.lbl_time
+            + [self.lbl_bat, self.lbl_device]
+        ):
             t.draw()
         for group in self.lbl_ticks:
             for t in group:
                 t.draw()
+
+        # 4. No-data warning overlay (if active)
+        if self.no_data_warning:
+            self.lbl_no_data.draw()
 
     def on_resize(self, event):
         w, h = event.size
@@ -595,8 +627,17 @@ class RealtimeViewer:
         scale_factor = min(w / 1400, h / 900)
         self.lbl_device.font_size = int(BASE_FONT_DEVICE * scale_factor)
 
+        # Position no-data warning in center
+        self.lbl_no_data.pos = (w * 0.5, h * 0.5)
+        self.lbl_no_data.font_size = max(12, int(20 * scale_factor))
+
         # Update text transforms
-        all_labels = self.lbl_names + self.lbl_qual + self.lbl_time + [self.lbl_bat, self.lbl_device]
+        all_labels = (
+            self.lbl_names
+            + self.lbl_qual
+            + self.lbl_time
+            + [self.lbl_bat, self.lbl_device, self.lbl_no_data]
+        )
         for group in self.lbl_ticks:
             all_labels.extend(group)
 

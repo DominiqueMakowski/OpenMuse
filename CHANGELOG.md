@@ -20,9 +20,12 @@
   - 0x88 battery packet decoding
   - 8-channel EEG (0x12) and 16-channel OPTICS (0x36) formats
   - Anomalous 0x11 (EEG4) packet detection and validation
+- **Viewer "No Data" Warning**: The viewer now displays a prominent "⚠ NO DATA RECEIVED" warning when no data has been received for 3+ seconds. This makes it immediately obvious when streaming has stopped (previously signals would just go flat).
 
 ### Changed
 - **Improved Warning Messages**: Channel mismatch warnings now include the TAG byte for easier debugging (e.g., "Padding packet with 4 channels (tag=0x11) to 8 channels (filling with NaN)").
+- **Refactored Channel Padding Logic**: Extracted channel mismatch handling into dedicated `_decode_with_channel_padding()` function for better code organization and readability.
+- **Simplified stream.py**: Removed verbose exception logging infrastructure to keep the code focused on core streaming logic. Simple print statements are used for the few warnings that may occur during normal operation.
 
 
 ## [0.1.8]

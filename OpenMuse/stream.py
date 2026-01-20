@@ -471,10 +471,7 @@ async def _stream_async(
         message = f"{ts}\t{uuid_str}\t{data.hex()}"
 
         if raw_data_file:
-            try:
-                raw_data_file.write(message + "\n")
-            except Exception:
-                pass
+            raw_data_file.write(message + "\n")
 
         subpackets = parse_message(message)
         decoded: Dict[str, np.ndarray] = {}
@@ -485,7 +482,11 @@ async def _stream_async(
                 n_channels = pkt_list[0].get("n_channels")
                 if n_channels:
                     streams[sensor_type] = create_stream_outlet(
-                        sensor_type, n_channels, client.name, address, clock_model
+                        sensor_type,
+                        n_channels,
+                        client.name,
+                        address,
+                        clock_model,
                     )
 
         # Decode & Make Timestamps (Relative Device Time)
@@ -534,14 +535,25 @@ async def _stream_async(
 
         while True:
             await asyncio.sleep(0.5)
-            if duration and (time.monotonic() - start_time) > duration:
+            elapsed = time.monotonic() - start_time
+
+            if duration and elapsed > duration:
+                if verbose:
+                    print(f"[{address}] Duration limit reached ({duration}s)")
                 break
             if not client.is_connected:
+                if verbose:
+                    print(f"[{address}] WARNING: BLE disconnected after {elapsed:.1f}s")
                 break
 
+        # Final flush and summary
         _flush_buffer()
+
         if verbose:
-            print("Stream stopped.")
+            total_samples = sum(samples_sent.values())
+            elapsed = time.monotonic() - start_time
+            print(f"[{address}] Stream stopped after {elapsed:.1f}s")
+            print(f"[{address}] Total samples sent: {samples_sent}")
 
 
 def stream(
@@ -618,7 +630,7 @@ def stream(
             )
 
         # Run all streams concurrently
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=False)
 
     try:
         asyncio.run(run_multistream())
