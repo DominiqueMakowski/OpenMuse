@@ -1,6 +1,30 @@
 # Changelog
 
 
+## [0.1.9]
+
+### Fixed
+- **Zero-Data-Loss Channel Mismatch Handling**: Fixed rare issue where Muse devices occasionally send packets with different TAG bytes for the same sensor type (e.g., 0x11 EEG4 instead of 0x12 EEG8, or 0x34 OPTICS4 instead of 0x36 OPTICS16). Previously, these packets were skipped entirely, causing minor data loss (~0.001% of packets). The new implementation pads mismatched packets with NaN values for missing channels, preserving all available sensor data while clearly marking unavailable channels. This is a firmware-level glitch that occurs very rarely (observed: 2 anomalous packets in 237,000 during 30-minute recording).
+
+  **Technical investigation findings:**
+  - TAG 0x11 (EEG4) contains 4 channels × 4 samples in 28 bytes
+  - TAG 0x12 (EEG8) contains 8 channels × 2 samples in 28 bytes
+  - Both use the same 28-byte packed format (16 × 14-bit values), but with different channel/sample arrangements
+  - The EEG4 format appears to contain only the 4 main EEG electrodes (TP9, AF7, AF8, TP10), without AUX channels
+  - Similar pattern exists for OPTICS: 0x34 (4ch), 0x35 (8ch), 0x36 (16ch)
+  - NaN padding is the correct approach as it preserves available data without misinterpreting bit layouts
+
+### Added
+- **New Firmware Test Data**: Added test data files from 2026 firmware recordings (`data_new_firmware.txt`, `data_new_firmware_anomalous.txt`) to ensure decoder compatibility with latest hardware.
+- **New Firmware Test Suite**: Added `TestNewFirmware` test class covering:
+  - 0x88 battery packet decoding
+  - 8-channel EEG (0x12) and 16-channel OPTICS (0x36) formats
+  - Anomalous 0x11 (EEG4) packet detection and validation
+
+### Changed
+- **Improved Warning Messages**: Channel mismatch warnings now include the TAG byte for easier debugging (e.g., "Padding packet with 4 channels (tag=0x11) to 8 channels (filling with NaN)").
+
+
 ## [0.1.8]
 
 ### Added

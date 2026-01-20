@@ -244,6 +244,110 @@ def create_stream_outlet(
     return SensorStream(outlet=StreamOutlet(info), clock=clock_class())
 
 
+def _decode_with_channel_padding(
+    sensor_type: str,
+    pkt_list: List[dict],
+    stream: SensorStream,
+    verbose: bool = True,
+) -> Tuple[np.ndarray, SensorStream]:
+    """
+    Decode packets and handle channel count mismatches by padding with NaN.
+
+    This handles rare cases where Muse devices send packets with different TAG bytes
+    than expected (e.g., 0x11 EEG4 vs 0x12 EEG8, or 0x34/0x35/0x36 for OPTICS).
+    Instead of dropping mismatched packets, we preserve the available channels and
+    pad the missing channels with NaN.
+
+    Parameters
+    ----------
+    sensor_type : str
+        Sensor type identifier (EEG, ACCGYRO, OPTICS, BATTERY)
+    pkt_list : List[dict]
+        List of decoded packet dictionaries from parse_message()
+    stream : SensorStream
+        The sensor stream object containing outlet and timestamp state
+    verbose : bool
+        Whether to print warnings for mismatched packets
+
+    Returns
+    -------
+    Tuple[np.ndarray, SensorStream]
+        Decoded data array (timestamps + channels) and updated stream object
+    """
+    expected_channels = stream.outlet.n_channels
+
+    # Separate packets by channel count
+    matching_pkts = []
+    mismatched_pkts = []  # (pkt, actual_channels)
+
+    for pkt in pkt_list:
+        pkt_channels = pkt.get("n_channels")
+        if pkt_channels == expected_channels:
+            matching_pkts.append(pkt)
+        else:
+            mismatched_pkts.append((pkt, pkt_channels))
+
+    result_array = np.empty((0, 1 + expected_channels))
+
+    # Process matching packets normally
+    if matching_pkts:
+        current_state = (
+            stream.base_time,
+            stream.wrap_offset,
+            stream.last_abs_tick,
+            stream.sample_counter,
+        )
+        array, base_time, wrap_offset, last_abs_tick, sample_counter = make_timestamps(
+            matching_pkts, *current_state
+        )
+        result_array = array
+        stream.base_time = base_time
+        stream.wrap_offset = wrap_offset
+        stream.last_abs_tick = last_abs_tick
+        stream.sample_counter = sample_counter
+
+    # Process mismatched packets: pad with NaN to preserve available data
+    for pkt, actual_channels in mismatched_pkts:
+        if verbose:
+            tag_hex = hex(pkt.get("tag_byte", 0))
+            print(
+                f"[{sensor_type}] Padding packet with {actual_channels} channels "
+                f"(tag={tag_hex}) to {expected_channels} channels (filling with NaN)"
+            )
+
+        current_state = (
+            stream.base_time,
+            stream.wrap_offset,
+            stream.last_abs_tick,
+            stream.sample_counter,
+        )
+        mismatch_array, base_time, wrap_offset, last_abs_tick, sample_counter = (
+            make_timestamps([pkt], *current_state)
+        )
+
+        if mismatch_array.size > 0:
+            n_samples = mismatch_array.shape[0]
+            # Create padded array: timestamp + expected_channels
+            padded = np.full(
+                (n_samples, 1 + expected_channels), np.nan, dtype=np.float64
+            )
+            padded[:, 0] = mismatch_array[:, 0]  # Copy timestamp
+            padded[:, 1 : actual_channels + 1] = mismatch_array[:, 1:]  # Copy channels
+
+            # Merge with existing data
+            if result_array.size > 0:
+                result_array = np.vstack([result_array, padded])
+            else:
+                result_array = padded
+
+        stream.base_time = base_time
+        stream.wrap_offset = wrap_offset
+        stream.last_abs_tick = last_abs_tick
+        stream.sample_counter = sample_counter
+
+    return result_array, stream
+
+
 async def _stream_async(
     address: str,
     preset: str,
@@ -290,14 +394,14 @@ async def _stream_async(
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
 
-        # --- Validate Channel Count ---
-        # This guards against mixing packets with different channel counts
-        # (e.g., 0x11 EEG4 with 4 channels vs 0x12 EEG8 with 8 channels)
+        # --- Validate Channel Count (Safety Check) ---
+        # Primary filtering happens in _on_data before make_timestamps.
+        # This check catches any edge cases that slip through.
         expected_channels = stream.outlet.n_channels
         if samples.shape[1] != expected_channels:
             if verbose:
                 print(
-                    f"[{sensor_type}] Skipping packet with mismatched channel count: "
+                    f"[{sensor_type}] Safety check: skipping packet with mismatched channel count: "
                     f"got {samples.shape[1]}, expected {expected_channels}"
                 )
             return
@@ -388,22 +492,11 @@ async def _stream_async(
         for sensor_type, pkt_list in subpackets.items():
             stream = streams.get(sensor_type)
             if stream:
-                current_state = (
-                    stream.base_time,
-                    stream.wrap_offset,
-                    stream.last_abs_tick,
-                    stream.sample_counter,
+                array, stream = _decode_with_channel_padding(
+                    sensor_type, pkt_list, stream, verbose
                 )
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
-                    make_timestamps(pkt_list, *current_state)
-                )
-                decoded[sensor_type] = array
-
-                # Update state
-                stream.base_time = base_time
-                stream.wrap_offset = wrap_offset
-                stream.last_abs_tick = last_abs_tick
-                stream.sample_counter = sample_counter
+                if array.size > 0:
+                    decoded[sensor_type] = array
 
         # Get 'now' for clock sync
         lsl_now = local_clock()
