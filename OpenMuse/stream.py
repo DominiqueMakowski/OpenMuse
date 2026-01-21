@@ -167,7 +167,10 @@ CLOCKS = {
     "constrained": ConstrainedRLSClock,
     "robust": RobustOffsetClock,
     "standard": StandardRLSClock,
-    "windowed": WindowedRegressionClock,
+    "windowed": WindowedRegressionClock,  # Default 30s window
+    "windowed10": (WindowedRegressionClock, 10.0),
+    "windowed30": (WindowedRegressionClock, 30.0),
+    "windowed60": (WindowedRegressionClock, 60.0),
 }
 
 
@@ -240,8 +243,14 @@ def create_stream_outlet(
     for ch_name in ch_names:
         channels.append_child("channel").append_child_value("label", ch_name)
 
-    clock_class = CLOCKS.get(clock_model, AdaptiveOffsetClock)
-    return SensorStream(outlet=StreamOutlet(info), clock=clock_class())
+    clock_entry = CLOCKS.get(clock_model, AdaptiveOffsetClock)
+    # Handle tuple entries (class, window_len) for windowed variants
+    if isinstance(clock_entry, tuple):
+        clock_class, window_len = clock_entry
+        clock_instance = clock_class(window_len_sec=window_len)
+    else:
+        clock_instance = clock_entry()
+    return SensorStream(outlet=StreamOutlet(info), clock=clock_instance)
 
 
 def _decode_with_channel_padding(
@@ -378,6 +387,8 @@ async def _stream_async(
     last_flush_time = 0.0
     samples_sent = {"EEG": 0, "ACCGYRO": 0, "OPTICS": 0, "BATTERY": 0}
     start_time = 0.0
+    last_data_time = 0.0  # Track when data was last received
+    data_timeout_warned = False  # Only warn once per timeout period
 
     def _queue_samples(sensor_type: str, data_array: np.ndarray, lsl_now: float):
         """
@@ -466,6 +477,10 @@ async def _stream_async(
 
     def _on_data(sender, data: bytearray):
         """Main data callback from Bleak."""
+        nonlocal last_data_time, data_timeout_warned
+        last_data_time = time.monotonic()
+        data_timeout_warned = False  # Reset warning flag when data arrives
+
         ts = get_utc_timestamp()
         uuid_str = str(sender.uuid) if hasattr(sender, "uuid") else str(sender)
         message = f"{ts}\t{uuid_str}\t{data.hex()}"
@@ -536,6 +551,17 @@ async def _stream_async(
         while True:
             await asyncio.sleep(0.5)
             elapsed = time.monotonic() - start_time
+
+            # Check for data timeout (no data received for 5+ seconds)
+            if last_data_time > 0:  # Only check after first data received
+                data_gap = time.monotonic() - last_data_time
+                if data_gap > 5.0 and not data_timeout_warned:
+                    if verbose:
+                        print(
+                            f"[{address}] WARNING: No data received for {data_gap:.1f}s "
+                            f"(connection may be stalled)"
+                        )
+                    data_timeout_warned = True
 
             if duration and elapsed > duration:
                 if verbose:

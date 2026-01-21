@@ -13,6 +13,12 @@
   - The EEG4 format appears to contain only the 4 main EEG electrodes (TP9, AF7, AF8, TP10), without AUX channels
   - Similar pattern exists for OPTICS: 0x34 (4ch), 0x35 (8ch), 0x36 (16ch)
   - NaN padding is the correct approach as it preserves available data without misinterpreting bit layouts
+  - TAG byte distribution across 30-minute multi-device recordings:
+    - EEG8 (0x12): ~61% of packets
+    - OPTICS16 (0x36): ~30% of packets
+    - ACCGYRO (0x47): ~8% of packets
+    - BATTERY (0x88/0x98): <0.1% of packets
+    - EEG4 (0x11): <0.01% of packets (rare firmware quirk)
 
 ### Added
 - **New Firmware Test Data**: Added test data files from 2026 firmware recordings (`data_new_firmware.txt`, `data_new_firmware_anomalous.txt`) to ensure decoder compatibility with latest hardware.
@@ -21,6 +27,7 @@
   - 8-channel EEG (0x12) and 16-channel OPTICS (0x36) formats
   - Anomalous 0x11 (EEG4) packet detection and validation
 - **Viewer "No Data" Warning**: The viewer now displays a prominent "⚠ NO DATA RECEIVED" warning when no data has been received for 3+ seconds. This makes it immediately obvious when streaming has stopped (previously signals would just go flat).
+- **Stream Data Timeout Warning**: The stream command now monitors for data gaps and prints a warning if no data is received for 5+ seconds. This helps diagnose stalled BLE connections without causing false alarms during normal operation.
 
 ### Changed
 - **Improved Warning Messages**: Channel mismatch warnings now include the TAG byte for easier debugging (e.g., "Padding packet with 4 channels (tag=0x11) to 8 channels (filling with NaN)").
