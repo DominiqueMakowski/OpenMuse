@@ -169,7 +169,9 @@ CLOCKS = {
     "standard": StandardRLSClock,
     "windowed": WindowedRegressionClock,  # Default 30s window
     "windowed10": (WindowedRegressionClock, 10.0),
+    "windowed15": (WindowedRegressionClock, 15.0),
     "windowed30": (WindowedRegressionClock, 30.0),
+    "windowed45": (WindowedRegressionClock, 45.0),
     "windowed60": (WindowedRegressionClock, 60.0),
 }
 

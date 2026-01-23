@@ -83,7 +83,9 @@ In stream.py, set the `clock` parameter:
 
     python -m OpenMuse stream --clock windowed    # ★ RECOMMENDED (30s window)
     python -m OpenMuse stream --clock windowed10  # 10s window (faster adaptation)
+    python -m OpenMuse stream --clock windowed15  # 15s window
     python -m OpenMuse stream --clock windowed30  # Same as "windowed"
+    python -m OpenMuse stream --clock windowed45  # 45s window
     python -m OpenMuse stream --clock windowed60  # 60s window (more stable)
     python -m OpenMuse stream --clock robust
     python -m OpenMuse stream --clock adaptive
