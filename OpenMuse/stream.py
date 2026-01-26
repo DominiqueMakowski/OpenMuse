@@ -168,6 +168,7 @@ CLOCKS = {
     "robust": RobustOffsetClock,
     "standard": StandardRLSClock,
     "windowed": WindowedRegressionClock,  # Default 30s window
+    "windowed5": (WindowedRegressionClock, 5.0),
     "windowed10": (WindowedRegressionClock, 10.0),
     "windowed15": (WindowedRegressionClock, 15.0),
     "windowed30": (WindowedRegressionClock, 30.0),
