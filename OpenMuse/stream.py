@@ -55,7 +55,7 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 
 **BUFFER OPERATION:**
 
-1. Samples held in buffer for FLUSH_INTERVAL seconds (default: 200ms)
+1. Samples held in buffer for FLUSH_INTERVAL seconds (default: 100ms)
 2. When buffer time limit reached, all buffered samples are:
    - Concatenated across packets/messages
    - **Sorted by device timestamp** (preserves device timing, corrects arrival order)
@@ -71,10 +71,11 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 **BUFFER SIZE RATIONALE:**
 - Original: 80ms (insufficient for ~90ms delays observed in data)
 - Previous: 250ms (captures nearly all out-of-order messages)
-- Current: 200ms (balances low latency with high temporal ordering accuracy)
-- Trade-off: Latency (200ms delay) vs. timestamp quality (near-perfect monotonic output)
-- For real-time applications: can reduce further, accept some non-monotonic timestamps
-- For recording quality: 200ms provides excellent temporal ordering
+- Previous: 200ms (balanced low latency with high temporal ordering)
+- Current: 100ms (optimized for low latency based on empirical analysis)
+- Analysis of 343k+ messages shows p99 arrival delay is ~90ms
+- Trade-off: Latency (100ms delay) vs. rare non-monotonic samples (<1%)
+- For recording quality: pyxdf dejittering handles any rare non-monotonic samples
 
 Timestamp Quality & Device Timing Preservation:
 ------------------------------------------------
@@ -159,8 +160,8 @@ from .decode import (
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
-MAX_BUFFER_PACKETS = 52  # ~200ms capacity for 256Hz
-FLUSH_INTERVAL = 0.2  # 200ms jitter buffer
+MAX_BUFFER_PACKETS = 26  # ~100ms capacity for 256Hz
+FLUSH_INTERVAL = 0.1  # 100ms jitter buffer
 
 CLOCKS = {
     "adaptive": AdaptiveOffsetClock,
@@ -168,6 +169,7 @@ CLOCKS = {
     "robust": RobustOffsetClock,
     "standard": StandardRLSClock,
     "windowed": WindowedRegressionClock,  # Default 30s window
+    "windowed2": (WindowedRegressionClock, 2.0),
     "windowed5": (WindowedRegressionClock, 5.0),
     "windowed10": (WindowedRegressionClock, 10.0),
     "windowed15": (WindowedRegressionClock, 15.0),
@@ -424,17 +426,14 @@ async def _stream_async(
         # We update the clock using the *latest* packet in this chunk
         last_device_time = device_times[-1]
 
-        # Only update if time moved forward (avoids issues with out-of-order arrival for model update)
+        # Always update clock - even late-arriving packets provide valid latency information
+        # The clock models use robust estimation (percentiles, windowed regression) that
+        # naturally handle out-of-order arrivals without being destabilized by them.
+        stream.clock.update(last_device_time, lsl_now)
+
+        # Track highest device time seen (for monitoring, not for filtering updates)
         if last_device_time > stream.last_update_device_time:
-            stream.clock.update(last_device_time, lsl_now)
             stream.last_update_device_time = last_device_time
-        else:
-            # Log when clock updates are skipped (helps debug out-of-order packet timing issues)
-            if verbose:
-                print(
-                    f"[{sensor_type}] Skipping clock update for non-monotonic device time: "
-                    f"{last_device_time} <= {stream.last_update_device_time}"
-                )
 
         # --- Map Timestamps ---
         # Transform the entire chunk using the current stable model

@@ -3,6 +3,10 @@
 
 ## [0.1.9]
 
+### Changed
+- **Optimized Buffer Flush Interval**: Reduced buffer flush interval from 200ms to 100ms based on empirical analysis of 343,000+ BLE messages across 10 recordings (158 minutes total). Analysis showed p99 arrival delay is ~90ms, so 100ms captures 99%+ of delayed messages while reducing streaming latency.
+- **Improved Clock Update Logic**: Clock models now receive updates from all packets, including those arriving out-of-order. Late-arriving packets still provide valid latency information for offset tracking, and the robust estimation methods (windowed regression, percentile-based) naturally handle out-of-order data without destabilization.
+
 ### Fixed
 - **Zero-Data-Loss Channel Mismatch Handling**: Fixed rare issue where Muse devices occasionally send packets with different TAG bytes for the same sensor type (e.g., 0x11 EEG4 instead of 0x12 EEG8, or 0x34 OPTICS4 instead of 0x36 OPTICS16). Previously, these packets were skipped entirely, causing minor data loss (~0.001% of packets). The new implementation pads mismatched packets with NaN values for missing channels, preserving all available sensor data while clearly marking unavailable channels. This is a firmware-level glitch that occurs very rarely (observed: 2 anomalous packets in 237,000 during 30-minute recording).
 
