@@ -115,6 +115,7 @@ def main(argv=None):
             "robust",
             "standard",
             "windowed",
+            "windowed2",
             "windowed5",
             "windowed10",
             "windowed15",
