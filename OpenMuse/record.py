@@ -137,6 +137,10 @@ def record(
     if not isinstance(outfile, str) or not outfile:
         raise ValueError("outfile must be a non-empty path string")
 
+    # Automatically add .txt extension if no extension is provided
+    if "." not in os.path.basename(outfile):
+        outfile = outfile + ".txt"
+
     chars = list(MuseS.DATA_CHARACTERISTICS)
 
     async def run_multirecord():

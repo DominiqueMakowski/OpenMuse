@@ -361,5 +361,137 @@ class TestBattery(unittest.TestCase):
             )
 
 
+class TestNewFirmware(unittest.TestCase):
+    """Test suite for new firmware data (2026+) with 0x88 battery packets and TAG variations."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up test fixtures."""
+        cls.test_data_dir = os.path.join(os.path.dirname(__file__), "test_data")
+        cls.new_firmware_file = os.path.join(cls.test_data_dir, "data_new_firmware.txt")
+        cls.anomalous_file = os.path.join(
+            cls.test_data_dir, "data_new_firmware_anomalous.txt"
+        )
+
+    def test_new_firmware_basic_parsing(self):
+        """Test basic parsing of new firmware data with 0x88 battery packets."""
+        with open(self.new_firmware_file, "r", encoding="utf-8") as f:
+            messages = [line.strip() for line in f if line.strip()]
+
+        result = decode_rawdata(messages)
+
+        # Should have EEG data
+        self.assertGreater(len(result["EEG"]), 0, "Should have EEG data")
+
+        # Should have ACCGYRO data
+        self.assertGreater(len(result["ACCGYRO"]), 0, "Should have ACCGYRO data")
+
+        # Should have OPTICS data (16-channel format)
+        self.assertGreater(len(result["OPTICS"]), 0, "Should have OPTICS data")
+
+        # Should have BATTERY data (0x88 packets)
+        self.assertGreater(
+            len(result["BATTERY"]), 0, "Should have BATTERY data from 0x88 packets"
+        )
+
+    def test_new_firmware_eeg8_channels(self):
+        """Test that new firmware EEG data has 8 channels (0x12 format)."""
+        with open(self.new_firmware_file, "r", encoding="utf-8") as f:
+            messages = [line.strip() for line in f if line.strip()]
+
+        result = decode_rawdata(messages)
+        eeg_df = result["EEG"]
+
+        # Should have 9 columns: time + 8 EEG channels
+        self.assertEqual(
+            len(eeg_df.columns),
+            9,
+            f"EEG should have 9 columns (time + 8 channels), got {len(eeg_df.columns)}",
+        )
+
+    def test_new_firmware_optics16_channels(self):
+        """Test that new firmware OPTICS data has 16 channels (0x36 format)."""
+        with open(self.new_firmware_file, "r", encoding="utf-8") as f:
+            messages = [line.strip() for line in f if line.strip()]
+
+        result = decode_rawdata(messages)
+        optics_df = result["OPTICS"]
+
+        # Should have 17 columns: time + 16 OPTICS channels
+        self.assertEqual(
+            len(optics_df.columns),
+            17,
+            f"OPTICS should have 17 columns (time + 16 channels), got {len(optics_df.columns)}",
+        )
+
+    def test_new_firmware_battery_0x88(self):
+        """Test that 0x88 battery packets are decoded correctly."""
+        with open(self.new_firmware_file, "r", encoding="utf-8") as f:
+            messages = [line.strip() for line in f if line.strip()]
+
+        result = decode_rawdata(messages)
+        battery_df = result["BATTERY"]
+
+        # Should have battery data
+        self.assertGreater(len(battery_df), 0)
+
+        # Battery values should be in valid range (0-100%)
+        battery_values = battery_df.iloc[:, 1].values  # Second column (after time)
+        self.assertTrue(
+            all(0 <= v <= 100 for v in battery_values),
+            f"Battery values should be 0-100%, got: {battery_values}",
+        )
+
+    def test_anomalous_eeg4_packet(self):
+        """Test that anomalous 0x11 (EEG4) packets are handled correctly."""
+        with open(self.anomalous_file, "r", encoding="utf-8") as f:
+            messages = [line.strip() for line in f if line.strip()]
+
+        # Check that we can find 0x11 packets in the raw data
+        found_eeg4 = False
+        found_eeg8 = False
+        for message in messages:
+            parsed = parse_message(message)
+            for subpacket in parsed.get("EEG", []):
+                tag = subpacket.get("tag_byte")
+                if tag == 0x11:
+                    found_eeg4 = True
+                    # Verify 0x11 has 4 channels
+                    self.assertEqual(
+                        subpacket["n_channels"], 4, "0x11 packet should have 4 channels"
+                    )
+                elif tag == 0x12:
+                    found_eeg8 = True
+                    # Verify 0x12 has 8 channels
+                    self.assertEqual(
+                        subpacket["n_channels"], 8, "0x12 packet should have 8 channels"
+                    )
+
+        self.assertTrue(found_eeg4, "Should find at least one 0x11 (EEG4) packet")
+        self.assertTrue(found_eeg8, "Should find at least one 0x12 (EEG8) packet")
+
+    def test_anomalous_packet_data_validity(self):
+        """Test that data from anomalous 0x11 packets has valid EEG values."""
+        with open(self.anomalous_file, "r", encoding="utf-8") as f:
+            messages = [line.strip() for line in f if line.strip()]
+
+        for message in messages:
+            parsed = parse_message(message)
+            for subpacket in parsed.get("EEG", []):
+                if subpacket.get("tag_byte") == 0x11:
+                    data = subpacket["data"]
+                    # Data should be in valid EEG range (0-1450 µV typically)
+                    self.assertTrue(
+                        np.all(data >= 0) and np.all(data <= 1500),
+                        f"EEG4 data should be in valid range, got min={data.min()}, max={data.max()}",
+                    )
+                    # Shape should be (4, 4) for 4 samples × 4 channels
+                    self.assertEqual(
+                        data.shape,
+                        (4, 4),
+                        f"EEG4 data should be (4, 4), got {data.shape}",
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -55,7 +55,7 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 
 **BUFFER OPERATION:**
 
-1. Samples held in buffer for FLUSH_INTERVAL seconds (default: 200ms)
+1. Samples held in buffer for FLUSH_INTERVAL seconds (default: 100ms)
 2. When buffer time limit reached, all buffered samples are:
    - Concatenated across packets/messages
    - **Sorted by device timestamp** (preserves device timing, corrects arrival order)
@@ -71,10 +71,11 @@ BLE transmission can REORDER entire messages (not just individual packets). Anal
 **BUFFER SIZE RATIONALE:**
 - Original: 80ms (insufficient for ~90ms delays observed in data)
 - Previous: 250ms (captures nearly all out-of-order messages)
-- Current: 200ms (balances low latency with high temporal ordering accuracy)
-- Trade-off: Latency (200ms delay) vs. timestamp quality (near-perfect monotonic output)
-- For real-time applications: can reduce further, accept some non-monotonic timestamps
-- For recording quality: 200ms provides excellent temporal ordering
+- Previous: 200ms (balanced low latency with high temporal ordering)
+- Current: 100ms (optimized for low latency based on empirical analysis)
+- Analysis of 343k+ messages shows p99 arrival delay is ~90ms
+- Trade-off: Latency (100ms delay) vs. rare non-monotonic samples (<1%)
+- For recording quality: pyxdf dejittering handles any rare non-monotonic samples
 
 Timestamp Quality & Device Timing Preservation:
 ------------------------------------------------
@@ -159,15 +160,22 @@ from .decode import (
 from .muse import MuseS
 from .utils import configure_lsl_api_cfg, get_utc_timestamp
 
-MAX_BUFFER_PACKETS = 52  # ~200ms capacity for 256Hz
-FLUSH_INTERVAL = 0.2  # 200ms jitter buffer
+MAX_BUFFER_PACKETS = 26  # ~100ms capacity for 256Hz
+FLUSH_INTERVAL = 0.1  # 100ms jitter buffer
 
 CLOCKS = {
     "adaptive": AdaptiveOffsetClock,
     "constrained": ConstrainedRLSClock,
     "robust": RobustOffsetClock,
     "standard": StandardRLSClock,
-    "windowed": WindowedRegressionClock,
+    "windowed": WindowedRegressionClock,  # Default 30s window
+    "windowed2": (WindowedRegressionClock, 2.0),
+    "windowed5": (WindowedRegressionClock, 5.0),
+    "windowed10": (WindowedRegressionClock, 10.0),
+    "windowed15": (WindowedRegressionClock, 15.0),
+    "windowed30": (WindowedRegressionClock, 30.0),
+    "windowed45": (WindowedRegressionClock, 45.0),
+    "windowed60": (WindowedRegressionClock, 60.0),
 }
 
 
@@ -240,8 +248,118 @@ def create_stream_outlet(
     for ch_name in ch_names:
         channels.append_child("channel").append_child_value("label", ch_name)
 
-    clock_class = CLOCKS.get(clock_model, AdaptiveOffsetClock)
-    return SensorStream(outlet=StreamOutlet(info), clock=clock_class())
+    clock_entry = CLOCKS.get(clock_model, AdaptiveOffsetClock)
+    # Handle tuple entries (class, window_len) for windowed variants
+    if isinstance(clock_entry, tuple):
+        clock_class, window_len = clock_entry
+        clock_instance = clock_class(window_len_sec=window_len)
+    else:
+        clock_instance = clock_entry()
+    return SensorStream(outlet=StreamOutlet(info), clock=clock_instance)
+
+
+def _decode_with_channel_padding(
+    sensor_type: str,
+    pkt_list: List[dict],
+    stream: SensorStream,
+    verbose: bool = True,
+) -> Tuple[np.ndarray, SensorStream]:
+    """
+    Decode packets and handle channel count mismatches by padding with NaN.
+
+    This handles rare cases where Muse devices send packets with different TAG bytes
+    than expected (e.g., 0x11 EEG4 vs 0x12 EEG8, or 0x34/0x35/0x36 for OPTICS).
+    Instead of dropping mismatched packets, we preserve the available channels and
+    pad the missing channels with NaN.
+
+    Parameters
+    ----------
+    sensor_type : str
+        Sensor type identifier (EEG, ACCGYRO, OPTICS, BATTERY)
+    pkt_list : List[dict]
+        List of decoded packet dictionaries from parse_message()
+    stream : SensorStream
+        The sensor stream object containing outlet and timestamp state
+    verbose : bool
+        Whether to print warnings for mismatched packets
+
+    Returns
+    -------
+    Tuple[np.ndarray, SensorStream]
+        Decoded data array (timestamps + channels) and updated stream object
+    """
+    expected_channels = stream.outlet.n_channels
+
+    # Separate packets by channel count
+    matching_pkts = []
+    mismatched_pkts = []  # (pkt, actual_channels)
+
+    for pkt in pkt_list:
+        pkt_channels = pkt.get("n_channels")
+        if pkt_channels == expected_channels:
+            matching_pkts.append(pkt)
+        else:
+            mismatched_pkts.append((pkt, pkt_channels))
+
+    result_array = np.empty((0, 1 + expected_channels))
+
+    # Process matching packets normally
+    if matching_pkts:
+        current_state = (
+            stream.base_time,
+            stream.wrap_offset,
+            stream.last_abs_tick,
+            stream.sample_counter,
+        )
+        array, base_time, wrap_offset, last_abs_tick, sample_counter = make_timestamps(
+            matching_pkts, *current_state
+        )
+        result_array = array
+        stream.base_time = base_time
+        stream.wrap_offset = wrap_offset
+        stream.last_abs_tick = last_abs_tick
+        stream.sample_counter = sample_counter
+
+    # Process mismatched packets: pad with NaN to preserve available data
+    for pkt, actual_channels in mismatched_pkts:
+        if verbose:
+            tag_hex = hex(pkt.get("tag_byte", 0))
+            print(
+                f"[{sensor_type}] Padding packet with {actual_channels} channels "
+                f"(tag={tag_hex}) to {expected_channels} channels (filling with NaN)"
+            )
+
+        current_state = (
+            stream.base_time,
+            stream.wrap_offset,
+            stream.last_abs_tick,
+            stream.sample_counter,
+        )
+        mismatch_array, base_time, wrap_offset, last_abs_tick, sample_counter = (
+            make_timestamps([pkt], *current_state)
+        )
+
+        if mismatch_array.size > 0:
+            n_samples = mismatch_array.shape[0]
+            # Create padded array: timestamp + expected_channels
+            padded = np.full(
+                (n_samples, 1 + expected_channels), np.nan, dtype=np.float64
+            )
+            padded[:, 0] = mismatch_array[:, 0]  # Copy timestamp
+            padded[:, 1 : actual_channels + 1] = mismatch_array[:, 1:]  # Copy channels
+
+            # Merge with existing data
+            if result_array.size > 0:
+                result_array = np.vstack([result_array, padded])
+            else:
+                result_array = padded
+
+        stream.base_time = base_time
+        stream.wrap_offset = wrap_offset
+        stream.last_abs_tick = last_abs_tick
+        stream.sample_counter = sample_counter
+
+    return result_array, stream
 
 
 async def _stream_async(
@@ -274,6 +392,8 @@ async def _stream_async(
     last_flush_time = 0.0
     samples_sent = {"EEG": 0, "ACCGYRO": 0, "OPTICS": 0, "BATTERY": 0}
     start_time = 0.0
+    last_data_time = 0.0  # Track when data was last received
+    data_timeout_warned = False  # Only warn once per timeout period
 
     def _queue_samples(sensor_type: str, data_array: np.ndarray, lsl_now: float):
         """
@@ -290,14 +410,14 @@ async def _stream_async(
         device_times = data_array[:, 0]
         samples = data_array[:, 1:]
 
-        # --- Validate Channel Count ---
-        # This guards against mixing packets with different channel counts
-        # (e.g., 0x11 EEG4 with 4 channels vs 0x12 EEG8 with 8 channels)
+        # --- Validate Channel Count (Safety Check) ---
+        # Primary filtering happens in _on_data before make_timestamps.
+        # This check catches any edge cases that slip through.
         expected_channels = stream.outlet.n_channels
         if samples.shape[1] != expected_channels:
             if verbose:
                 print(
-                    f"[{sensor_type}] Skipping packet with mismatched channel count: "
+                    f"[{sensor_type}] Safety check: skipping packet with mismatched channel count: "
                     f"got {samples.shape[1]}, expected {expected_channels}"
                 )
             return
@@ -306,17 +426,14 @@ async def _stream_async(
         # We update the clock using the *latest* packet in this chunk
         last_device_time = device_times[-1]
 
-        # Only update if time moved forward (avoids issues with out-of-order arrival for model update)
+        # Always update clock - even late-arriving packets provide valid latency information
+        # The clock models use robust estimation (percentiles, windowed regression) that
+        # naturally handle out-of-order arrivals without being destabilized by them.
+        stream.clock.update(last_device_time, lsl_now)
+
+        # Track highest device time seen (for monitoring, not for filtering updates)
         if last_device_time > stream.last_update_device_time:
-            stream.clock.update(last_device_time, lsl_now)
             stream.last_update_device_time = last_device_time
-        else:
-            # Log when clock updates are skipped (helps debug out-of-order packet timing issues)
-            if verbose:
-                print(
-                    f"[{sensor_type}] Skipping clock update for non-monotonic device time: "
-                    f"{last_device_time} <= {stream.last_update_device_time}"
-                )
 
         # --- Map Timestamps ---
         # Transform the entire chunk using the current stable model
@@ -362,15 +479,16 @@ async def _stream_async(
 
     def _on_data(sender, data: bytearray):
         """Main data callback from Bleak."""
+        nonlocal last_data_time, data_timeout_warned
+        last_data_time = time.monotonic()
+        data_timeout_warned = False  # Reset warning flag when data arrives
+
         ts = get_utc_timestamp()
         uuid_str = str(sender.uuid) if hasattr(sender, "uuid") else str(sender)
         message = f"{ts}\t{uuid_str}\t{data.hex()}"
 
         if raw_data_file:
-            try:
-                raw_data_file.write(message + "\n")
-            except Exception:
-                pass
+            raw_data_file.write(message + "\n")
 
         subpackets = parse_message(message)
         decoded: Dict[str, np.ndarray] = {}
@@ -381,29 +499,22 @@ async def _stream_async(
                 n_channels = pkt_list[0].get("n_channels")
                 if n_channels:
                     streams[sensor_type] = create_stream_outlet(
-                        sensor_type, n_channels, client.name, address, clock_model
+                        sensor_type,
+                        n_channels,
+                        client.name,
+                        address,
+                        clock_model,
                     )
 
         # Decode & Make Timestamps (Relative Device Time)
         for sensor_type, pkt_list in subpackets.items():
             stream = streams.get(sensor_type)
             if stream:
-                current_state = (
-                    stream.base_time,
-                    stream.wrap_offset,
-                    stream.last_abs_tick,
-                    stream.sample_counter,
+                array, stream = _decode_with_channel_padding(
+                    sensor_type, pkt_list, stream, verbose
                 )
-                array, base_time, wrap_offset, last_abs_tick, sample_counter = (
-                    make_timestamps(pkt_list, *current_state)
-                )
-                decoded[sensor_type] = array
-
-                # Update state
-                stream.base_time = base_time
-                stream.wrap_offset = wrap_offset
-                stream.last_abs_tick = last_abs_tick
-                stream.sample_counter = sample_counter
+                if array.size > 0:
+                    decoded[sensor_type] = array
 
         # Get 'now' for clock sync
         lsl_now = local_clock()
@@ -441,14 +552,36 @@ async def _stream_async(
 
         while True:
             await asyncio.sleep(0.5)
-            if duration and (time.monotonic() - start_time) > duration:
+            elapsed = time.monotonic() - start_time
+
+            # Check for data timeout (no data received for 5+ seconds)
+            if last_data_time > 0:  # Only check after first data received
+                data_gap = time.monotonic() - last_data_time
+                if data_gap > 5.0 and not data_timeout_warned:
+                    if verbose:
+                        print(
+                            f"[{address}] WARNING: No data received for {data_gap:.1f}s "
+                            f"(connection may be stalled)"
+                        )
+                    data_timeout_warned = True
+
+            if duration and elapsed > duration:
+                if verbose:
+                    print(f"[{address}] Duration limit reached ({duration}s)")
                 break
             if not client.is_connected:
+                if verbose:
+                    print(f"[{address}] WARNING: BLE disconnected after {elapsed:.1f}s")
                 break
 
+        # Final flush and summary
         _flush_buffer()
+
         if verbose:
-            print("Stream stopped.")
+            total_samples = sum(samples_sent.values())
+            elapsed = time.monotonic() - start_time
+            print(f"[{address}] Stream stopped after {elapsed:.1f}s")
+            print(f"[{address}] Total samples sent: {samples_sent}")
 
 
 def stream(
@@ -525,7 +658,7 @@ def stream(
             )
 
         # Run all streams concurrently
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=False)
 
     try:
         asyncio.run(run_multistream())

@@ -109,8 +109,21 @@ def main(argv=None):
     p_stream.add_argument(
         "--clock",
         default="windowed",
-        choices=["adaptive", "constrained", "robust", "standard", "windowed"],
-        help="Clock synchronization model (default: windowed)",
+        choices=[
+            "adaptive",
+            "constrained",
+            "robust",
+            "standard",
+            "windowed",
+            "windowed2",
+            "windowed5",
+            "windowed10",
+            "windowed15",
+            "windowed30",
+            "windowed45",
+            "windowed60",
+        ],
+        help="Clock synchronization model (default: windowed). windowed/windowed30 use 30s window, windowed5 uses 5s, windowed10 uses 10s, windowed15 uses 15s, windowed45 uses 45s, windowed60 uses 60s.",
     )
     p_stream.add_argument(
         "--sensors",

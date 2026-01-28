@@ -9,30 +9,33 @@ bloat - variable latency spikes caused by BLE connection intervals and packet qu
 SYNCHRONIZATION VALIDATION SUMMARY (January 2026)
 -------------------------------------------------
 
-Extensive testing was performed using a dual-device photosensor experiment:
-- Two Muse S Athena headbands (old + new firmware) simultaneously streaming
+Extensive testing was performed using a 3-device photosensor experiment:
+- Three Muse S Athena headbands simultaneously streaming:
+  - Muse 2 (grey): 00:55:DA:BB:CD:CD
+  - Muse 3 (black): 00:55:DA:BA:05:F9
+  - Muse 1 old firmware (black): 00:55:DA:B9:FA:20
 - External light sensor (BITalino) as ground truth reference
 - Screen flashing at ~5Hz for 30+ minutes
 - Compared event onset detection across different clock models
 
 **KEY FINDINGS:**
 
-    ┌─────────────────┬────────────────┬────────────────┬───────────┐
-    │ Clock Type      │ OLD Device Std │ NEW Device Std │ Stability │
-    ├─────────────────┼────────────────┼────────────────┼───────────┤
-    │ WindowedClock   │     5.0 ms     │    42.5 ms     │  ★★★★★   │
-    │ RobustClock     │    11.2 ms     │   131.9 ms     │  ★★★☆☆   │
-    │ StandardRLS     │     6.7 ms     │   148.6 ms     │  ★★☆☆☆   │
-    │ AdaptiveClock   │     5.4 ms     │   177.8 ms     │  ★★☆☆☆   │
-    │ ConstrainedRLS  │    36.1 ms     │   147.3 ms     │  ★★☆☆☆   │
-    └─────────────────┴────────────────┴────────────────┴───────────┘
+    ┌─────────────────┬─────────────┬─────────────┬─────────────┬───────────┐
+    │ Clock Type      │ Muse1_OldFW │ Muse2_Grey  │ Muse3_Black │ Match Rate│
+    ├─────────────────┼─────────────┼─────────────┼─────────────┼───────────┤
+    │ WindowedClock   │   43.3 ms   │   45.0 ms   │   40.7 ms   │   100%    │
+    │ RobustClock     │  191.0 ms   │  189.8 ms   │  108.2 ms   │   69-93%  │
+    │ ConstrainedRLS  │  141.7 ms   │  142.0 ms   │  145.7 ms   │   79-82%  │
+    │ StandardRLS     │  139.8 ms   │  118.8 ms   │  102.4 ms   │   16-20%  │
+    │ AdaptiveClock   │  170.1 ms   │  151.5 ms   │  123.1 ms   │   50-55%  │
+    └─────────────────┴─────────────┴─────────────┴─────────────┴───────────┘
 
-    Average OPTICS jitter (both devices combined):
-    1. windowed:     23.7 ms  ★ RECOMMENDED
-    2. robust:       71.6 ms
-    3. standard:     77.6 ms
-    4. adaptive:     91.6 ms
-    5. constrained:  91.7 ms
+    Average OPTICS jitter (all 3 devices combined):
+    1. windowed:     43.0 ms  ★ RECOMMENDED (100% event match rate)
+    2. robust:      163.0 ms
+    3. constrained: 143.1 ms
+    4. standard:    120.3 ms  (but only 16-20% match rate!)
+    5. adaptive:    148.2 ms
 
 **RECOMMENDATIONS:**
 
@@ -78,7 +81,12 @@ USAGE
 
 In stream.py, set the `clock` parameter:
 
-    python -m OpenMuse stream --clock windowed  # ★ RECOMMENDED
+    python -m OpenMuse stream --clock windowed    # ★ RECOMMENDED (30s window)
+    python -m OpenMuse stream --clock windowed10  # 10s window (faster adaptation)
+    python -m OpenMuse stream --clock windowed15  # 15s window
+    python -m OpenMuse stream --clock windowed30  # Same as "windowed"
+    python -m OpenMuse stream --clock windowed45  # 45s window
+    python -m OpenMuse stream --clock windowed60  # 60s window (more stable)
     python -m OpenMuse stream --clock robust
     python -m OpenMuse stream --clock adaptive
     python -m OpenMuse stream --clock constrained
@@ -87,10 +95,6 @@ In stream.py, set the `clock` parameter:
 Or use None/"none" to disable clock synchronization entirely and use raw
 device timestamps (not recommended for multi-stream experiments).
 
-See Also
---------
-- validation/synchronization/validate.py: Full validation script
-- validation/new_firmware/summary.txt: Firmware compatibility notes
 """
 
 from collections import deque
@@ -188,10 +192,14 @@ class RobustOffsetClock:
             robust_offset = np.percentile(offsets, self.percentile)
 
             # Smooth with EMA to avoid sudden jumps
-            self._offset = self.ema_alpha * robust_offset + (1 - self.ema_alpha) * self._offset
+            self._offset = (
+                self.ema_alpha * robust_offset + (1 - self.ema_alpha) * self._offset
+            )
         else:
             # Not enough history yet - use simple EMA on raw offset
-            self._offset = self.ema_alpha * current_offset + (1 - self.ema_alpha) * self._offset
+            self._offset = (
+                self.ema_alpha * current_offset + (1 - self.ema_alpha) * self._offset
+            )
 
     def map_time(self, device_times: np.ndarray) -> np.ndarray:
         """Transform device timestamps to LSL time using current offset."""
@@ -247,7 +255,9 @@ class AdaptiveOffsetClock:
         # Linearly decay alpha from 1.0 down to 0.02 over the warmup period
         if self.packets_processed < self.warmup_packets:
             progress = self.packets_processed / self.warmup_packets
-            self.current_alpha = self.current_alpha * (1 - progress) + self.final_alpha * progress
+            self.current_alpha = (
+                self.current_alpha * (1 - progress) + self.final_alpha * progress
+            )
         else:
             self.current_alpha = self.final_alpha
 
@@ -265,10 +275,14 @@ class AdaptiveOffsetClock:
                 # We found a better (lower latency) path. Adapt 5x faster.
                 effective_alpha = min(1.0, self.current_alpha * 5.0)
 
-            self._offset = (effective_alpha * target_offset) + ((1 - effective_alpha) * self._offset)
+            self._offset = (effective_alpha * target_offset) + (
+                (1 - effective_alpha) * self._offset
+            )
         else:
             # Fallback for very first few samples
-            self._offset = (self.current_alpha * current_offset) + ((1 - self.current_alpha) * self._offset)
+            self._offset = (self.current_alpha * current_offset) + (
+                (1 - self.current_alpha) * self._offset
+            )
 
     def map_time(self, device_times: np.ndarray) -> np.ndarray:
         if not self.initialized:
@@ -308,7 +322,9 @@ class WindowedRegressionClock:
 
         # 3. Fit model (only periodically to save CPU)
         # We also force a check if we aren't initialized yet but have enough data
-        if (lsl_now - self.last_fit_time) > self.fit_interval or (not self.initialized and len(self.history) >= 10):
+        if (lsl_now - self.last_fit_time) > self.fit_interval or (
+            not self.initialized and len(self.history) >= 10
+        ):
             self._fit()
             self.last_fit_time = lsl_now
 
@@ -351,7 +367,9 @@ class WindowedRegressionClock:
                 return device_times + (lt - dt)
 
             # Emergency fallback if history is empty (rare, but prevents 0.0 crash)
-            return device_times + (local_clock() - device_times[-1] if device_times.size > 0 else 0)
+            return device_times + (
+                local_clock() - device_times[-1] if device_times.size > 0 else 0
+            )
 
         return self.intercept + (self.slope * device_times)
 
@@ -524,7 +542,9 @@ class ConstrainedRLSClock:
 
         # Use percentile instead of minimum (more robust to single outliers)
         if len(self._offset_history) >= 10:
-            baseline_offset = np.percentile(list(self._offset_history), self._percentile)
+            baseline_offset = np.percentile(
+                list(self._offset_history), self._percentile
+            )
         else:
             baseline_offset = min(self._offset_history)
 
