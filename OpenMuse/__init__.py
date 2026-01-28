@@ -6,5 +6,6 @@ from .muse import MuseS
 from .record import record
 from .stream import stream
 from .view import view
+from .drift_correction import correct_timestamps, DriftInfo
 
 __version__ = "0.1.9"

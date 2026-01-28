@@ -95,10 +95,6 @@ In stream.py, set the `clock` parameter:
 Or use None/"none" to disable clock synchronization entirely and use raw
 device timestamps (not recommended for multi-stream experiments).
 
-See Also
---------
-- validation/synchronization/validate.py: Full validation script
-- validation/new_firmware/summary.txt: Firmware compatibility notes
 """
 
 from collections import deque
