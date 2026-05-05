@@ -451,6 +451,61 @@ async def _stream_async(
             print("Stream stopped.")
 
 
+async def _stream_async_with_reconnect(
+    address: str,
+    preset: str,
+    duration: Optional[float],
+    raw_data_file: Optional[TextIO],
+    verbose: bool,
+    clock_model: str,
+    sensors: Optional[List[str]],
+    auto_reconnect: bool,
+    reconnect_attempts: int,
+    reconnect_delay: float,
+) -> None:
+    """Wrapper around _stream_async that retries on connection failure.
+
+    A clean exit (duration elapsed) or a KeyboardInterrupt-driven
+    CancelledError is never retried.  Only unexpected BLE/OS exceptions
+    trigger the reconnect loop.
+    """
+    if not auto_reconnect:
+        # Fast path -- behaviour identical to before this patch.
+        await _stream_async(
+            address, preset, duration, raw_data_file, verbose, clock_model, sensors
+        )
+        return
+
+    attempt = 0
+    while True:
+        try:
+            await _stream_async(
+                address, preset, duration, raw_data_file, verbose, clock_model, sensors
+            )
+            attempt = 0
+            #return  # Normal exit: duration elapsed or stream ended cleanly.
+        except asyncio.CancelledError:
+            # Propagate cancellation (Ctrl+C / KeyboardInterrupt pathway).
+            raise
+        except Exception as exc:
+            attempt += 1
+            if attempt >= reconnect_attempts:
+                print(
+                    f"[{address}] Connection lost: {exc}\n"
+                    f"[{address}] Reached maximum reconnection attempts "
+                    f"({reconnect_attempts}). Giving up.",
+                    flush=True,
+                )
+                raise
+            print(
+                f"[{address}] Connection lost: {exc}\n"
+                f"[{address}] Reconnecting in {reconnect_delay}s "
+                f"(attempt {attempt}/{reconnect_attempts})...",
+                flush=True,
+            )
+            await asyncio.sleep(reconnect_delay)
+
+
 def stream(
     address: Union[str, List[str]],
     preset: str = "p1041",
@@ -459,6 +514,9 @@ def stream(
     verbose: bool = True,
     clock: str = "windowed",
     sensors: Optional[List[str]] = None,
+    auto_reconnect: bool = False,
+    reconnect_attempts: int = 3,
+    reconnect_delay: float = 2.0,
 ) -> None:
     """
     Stream decoded EEG and accelerometer/gyroscope data over LSL.
@@ -519,8 +577,9 @@ def stream(
 
             # Create task for this device
             tasks.append(
-                _stream_async(
-                    addr, preset, duration, raw_data_file, verbose, clock, sensors
+                _stream_async_with_reconnect(
+                    addr, preset, duration, raw_data_file, verbose, clock, sensors,
+                    auto_reconnect, reconnect_attempts, reconnect_delay,
                 )
             )
 

@@ -119,6 +119,26 @@ def main(argv=None):
         choices=["EEG", "ACCGYRO", "OPTICS", "BATTERY"],
         help="Sensor types to stream (default: all). Example: --sensors EEG OPTICS",
     )
+    p_stream.add_argument(
+        "--auto-reconnect",
+        action="store_true",
+        default=False,
+        help="Automatically retry the connection if it drops unexpectedly.",
+    )
+    p_stream.add_argument(
+        "--reconnect-attempts",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Maximum number of reconnection attempts before giving up (default: 5).",
+    )
+    p_stream.add_argument(
+        "--reconnect-delay",
+        type=float,
+        default=5.0,
+        metavar="T",
+        help="Seconds to wait between reconnection attempts (default: 5.0).",
+    )
 
     def handle_stream(ns):
         from .stream import stream
@@ -133,6 +153,9 @@ def main(argv=None):
             verbose=True,
             clock=ns.clock,
             sensors=ns.sensors,
+            auto_reconnect=ns.auto_reconnect,
+            reconnect_attempts=ns.reconnect_attempts,
+            reconnect_delay=ns.reconnect_delay,
         )
         return 0
 
