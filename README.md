@@ -2,7 +2,6 @@
 
 *The Open Python Muse S Athena EEG Decoder*
 
-[![CI](https://github.com/DominiqueMakowski/OpenMuse/actions/workflows/ci.yml/badge.svg)](https://github.com/DominiqueMakowski/OpenMuse/actions/workflows/ci.yml)
 [![Muse S Athena](media/device.webp)](https://eu.choosemuse.com/products/muse-s-athena)
 
 
@@ -28,7 +27,7 @@ This software allows recording, streaming via LSL and visualizing signals from t
 Install from GitHub by opening a terminal and running:
 
 ```powershell
-pip install https://github.com/DominiqueMakowski/OpenMuse/zipball/main
+pip install git+https://github.com/writer-in-fancy-pants/OpenMuse.git
 ```
 
 ## Usage
@@ -116,9 +115,14 @@ To record from multiple Muse devices simultaneously (e.g., for hyperscanning stu
 OpenMuse stream --address 00:55:DA:B9:FA:20 00:55:DA:BB:CD:CD
 ```
 
+The stream can be set to auto-reconnect in case of frequently broken connections
+```powershell
+OpenMuse stream --address <address from 'OpenMuse find'> --auto-reconnect
+```
+
 This will manage all connections in parallel within a single process. LSL streams will be named with their respective device IDs (e.g., `Muse-EEG (MAC1)`), allowing you to distinguish them on the receiving end.
 
-3. **Visualize (optional)**: When multiple devices are streaming, the viewer will automatically detect and display streams from only the first device by default to avoid confusion. To view a specific device, use the `--address` filter:
+3. **Visualize (optional)**: (not supported on android termux) When multiple devices are streaming, the viewer will automatically detect and display streams from only the first device by default to avoid confusion. To view a specific device, use the `--address` filter:
 
 ```powershell
 # View first device
