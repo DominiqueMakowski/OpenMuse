@@ -11,9 +11,12 @@ Features:
 
 import time
 import numpy as np
-from vispy import app, gloo
-from vispy.util.transforms import ortho
-from vispy.visuals import TextVisual
+try:
+    from vispy import app, gloo
+    from vispy.util.transforms import ortho
+    from vispy.visuals import TextVisual
+except:
+    print("Vispy is not available. On android, vispy is not supported"
 from .utils import configure_lsl_api_cfg
 
 # --- SIGNAL SHADERS ---
