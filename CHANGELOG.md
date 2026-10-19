@@ -6,6 +6,7 @@
 - `view-rerun` CLI for displaying existing Muse LSL streams in rearrangeable Rerun time-series panes, with stream/device/channel filters and `.rrd` saving. Rerun is included as a standard dependency; no extra installation flags are needed.
 - `view-rerun --layout all|eeg|accgyro|optics` selects the full grid or a sensor-specific layout, composable with device, stream-name, and channel filters.
 - The `all` and `accgyro` Rerun layouts automatically include a gravity-derived roll/pitch coordinate-frame view as an equal-sized grid tile in `all`, or in the left quarter in `accgyro`, with transforms recorded on the LSL timeline. Yaw is fixed to zero; this is a debugging estimate, not full pose tracking.
+- The Rerun pose pane includes a bundled head model derived from the supplied STEP source, moving with the gravity tilt estimate and embedded in saved `.rrd` recordings.
 
 ### Changed
 - The standard Rerun dependency requires a platform supported by its binary wheels; see the README for the supported architectures and Linux glibc requirement.
@@ -13,6 +14,7 @@
 ### Fixed
 - Activate the current `view-rerun` channel grid on startup instead of retaining stale layouts that can show empty plots.
 - Start the Rerun Blueprint and Selection sidebars collapsed while keeping the timeline available.
+- Map Muse forward/right/down gravity into the head model's left/back/up frame before estimating tilt, correcting the swapped forward-nod and side-tilt directions. Keep gravity-based orientation without startup zeroing or mounting-angle correction.
 
 
 ## [0.1.8]

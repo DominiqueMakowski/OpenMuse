@@ -2,6 +2,7 @@
 
 import math
 import time
+from importlib.resources import files
 
 import numpy as np
 
@@ -9,8 +10,11 @@ from .utils import configure_lsl_api_cfg
 
 
 def _gravity_rotation(acceleration: np.ndarray) -> np.ndarray | None:
-    """Map measured acceleration to world +Z with roll/pitch only (yaw = 0)."""
-    ax, ay, az = acceleration
+    """Map Muse gravity (forward, right, down) to the Z-up, -Y-facing head pose."""
+    forward, right, down = acceleration
+    # The model's +X is subject-left, +Y is back, and +Z is up.
+    # Convert Muse gravity to head-local *up*: negate gravity after changing basis.
+    ax, ay, az = right, forward, down
     length = math.hypot(ax, ay, az)
     if not math.isfinite(length) or length < 1e-6:
         return None
@@ -75,6 +79,10 @@ def view_rerun(
                 orientation_sources[inlet] = (frame, [labels.index(label) for label in required])
                 orientation_views.append(rrb.Spatial3DView(
                     origin=frame, name=f"{info.name}: gravity tilt (yaw = 0)",
+                    eye_controls=rrb.EyeControls3D(
+                        position=[2.5, -4.0, 2.0], look_target=[0.0, 0.0, 0.0],
+                        eye_up=[0.0, 0.0, 1.0],
+                    ),
                 ))
             selected: list[tuple[int, str]] = []
             for index in range(info.n_channels):
@@ -117,6 +125,13 @@ def view_rerun(
             sinks.append(rr.FileSink(save))
         rr.set_sinks(*sinks, recording=recording)
         rr.send_blueprint(blueprint, make_active=True, recording=recording)
+        head_asset = None
+        head_visible: set[StreamInlet] = set()
+        if orientation_sources:
+            head_asset = rr.Asset3D(
+                contents=files("OpenMuse").joinpath("assets/head.glb").read_bytes(),
+                media_type="model/gltf-binary",
+            )
         for frame, _ in orientation_sources.values():
             rr.log(frame, rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True, recording=recording)
             rr.log(frame + "/reference", rr.TransformAxes3D(0.7),
@@ -139,15 +154,21 @@ def view_rerun(
                                     recording=recording, strict=True)
                 if inlet in orientation_sources:
                     frame, acceleration_indices = orientation_sources[inlet]
-                    for timestamp, sample in zip(timestamps, values):
+                    for timestamp, sample in zip(timestamps, values, strict=True):
                         rotation = _gravity_rotation(sample[acceleration_indices])
                         rr.set_time("lsl_time", duration=float(timestamp), recording=recording)
                         if rotation is None:
-                            rr.log(frame + "/sensor", rr.Clear(recursive=False),
+                            rr.log(frame + "/sensor", rr.Clear(recursive=True),
                                    recording=recording)
+                            head_visible.discard(inlet)
                         else:
                             rr.log(frame + "/sensor", rr.Transform3D(mat3x3=rotation),
                                    rr.TransformAxes3D(1.0), recording=recording, strict=True)
+                            if inlet not in head_visible:
+                                assert head_asset is not None
+                                rr.log(frame + "/sensor/head", head_asset,
+                                       recording=recording, strict=True)
+                                head_visible.add(inlet)
             if not received:
                 time.sleep(0.01)
     finally:

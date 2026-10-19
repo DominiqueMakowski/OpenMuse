@@ -31,7 +31,10 @@ OpenMuse = "OpenMuse.cli:main"
 dev = ["pytest", "pytest-cov", "flake8"]
 
 [tool.setuptools]
-packages = ["OpenMuse"]
+packages = ["OpenMuse", "OpenMuse.assets"]
+
+[tool.setuptools.package-data]
+OpenMuse = ["assets/*.glb", "assets/*.step"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

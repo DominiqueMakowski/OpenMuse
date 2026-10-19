@@ -163,8 +163,8 @@ channels from its matching LSL streams. Layout selection combines with
 `--address`, `--stream-name`, and `--channels`; only channels matching every
 specified filter are displayed. Layout names are case-insensitive.
 
-The `all` and `accgyro` layouts automatically include a simple 3D coordinate-frame
-view whenever a matching ACCGYRO stream is available:
+The `all` and `accgyro` layouts automatically include a 3D head model and
+coordinate frames whenever a matching ACCGYRO stream is available:
 
 ```sh
 uv run OpenMuse view-rerun --layout accgyro
@@ -176,16 +176,35 @@ In the `all` layout, each 3D pose pane occupies one grid tile, the same size as 
 signal plot. In the `accgyro` layout, the 3D pane uses the left quarter of the
 viewport and signal plots use the remaining three quarters.
 Pose display requires a matching ACCGYRO stream with `ACC_X`,
-`ACC_Y`, and `ACC_Z` labels. The smaller fixed axes are the
-reference frame; the larger axes show sensor tilt. Red/green/blue indicate X/Y/Z.
-The rotation maps measured acceleration to reference +Z using roll/pitch,
-with yaw fixed to zero and no translation or gyro integration. This is a
-gravity-based debugging estimate, not ROS TF, calibrated head pose, or a full
-attitude estimator. Motion acceleration distorts the estimate. Zero or non-finite
-acceleration clears the sensor axes until valid data returns.
+`ACC_Y`, and `ACC_Z` labels. The smaller fixed axes are the reference frame;
+the larger axes show the head-local frame. Red/green/blue indicate X/Y/Z.
+The model uses +X toward the wearer's left, +Y backward, and +Z upward;
+its face points toward −Y. Left/right refer to the wearer, not the screen.
+
+Using the [Muse gravity convention](https://siddhantattavar.com/libmuse/enumcom_1_1choosemuse_1_1libmuse_1_1_accelerometer.html),
+positive `ACC_X` indicates nodding down, positive `ACC_Y` indicates tilting
+toward the wearer's right, and `ACC_Z` is +1 g when level. Before computing
+roll/pitch, the viewer converts gravity to head-local up as
+`(ACC_Y, ACC_X, ACC_Z)` and aligns that vector with reference +Z.
+Yaw is fixed to zero, with no translation or gyro integration.
+
+There is no startup zeroing or mounting-angle correction: `(0, 0, 1)` gives an
+upright model, while nonzero horizontal gravity components remain visible even
+when stationary. This is a gravity-based debugging estimate, not ROS TF,
+calibrated head pose, or a full attitude estimator. Motion acceleration distorts
+the estimate. Zero or non-finite acceleration hides the head model and sensor
+axes until valid data returns.
 
 Transforms use `lsl_time` and are included when `--save` is specified. Channel
 filters affect the scalar plots; tilt still uses all three acceleration channels.
+
+The bundled head model is derived from `OpenMuse/assets/head.step`; the viewer
+loads `head.glb` without requiring CAD software. The STEP surface was tessellated
+with Gmsh (1.5–3 mm mesh size), centered on its mesh bounding box, and uniformly
+scaled to a height of 1.6 viewer units. The model keeps +Z up and its face toward
+−Y. This is a visualization convention, not a measured sensor-to-head calibration.
+The model is embedded in `.rrd` recordings, so replay does not need the source STEP
+or an external model file.
 
 Each selected channel starts in its own time-series pane. Use Rerun's Blueprint
 panel to rearrange panes, select signals, or combine series in a view. Without
