@@ -178,6 +178,35 @@ def main(argv=None):
 
     p_view.set_defaults(func=handle_view)
 
+    p_rerun = subparsers.add_parser(
+        "view-rerun", help="View existing LSL streams in Rerun"
+    )
+    p_rerun.add_argument(
+        "--layout", type=str.lower, choices=["all", "eeg", "accgyro", "optics"],
+        default="all", help="Channel grid preset (default: all); combines with other filters",
+    )
+    p_rerun.add_argument("--address", help="Filter Muse device IDs in LSL stream names")
+    p_rerun.add_argument("--stream-name", help="LSL stream name substring")
+    p_rerun.add_argument("--channels", nargs="+", help="Exact channel labels to display")
+    p_rerun.add_argument("--save", metavar="FILE.rrd", help="Also save a Rerun recording")
+    p_rerun.add_argument("--duration", type=float, help="Stop after this many seconds")
+    p_rerun.add_argument("--no-spawn", action="store_true", help="Save without opening a viewer (requires --save)")
+
+    def handle_view_rerun(ns):
+        import math
+        from .view_rerun import view_rerun
+
+        if ns.duration is not None and (not math.isfinite(ns.duration) or ns.duration <= 0):
+            parser.error("--duration must be finite and positive")
+        if ns.no_spawn and not ns.save:
+            parser.error("--no-spawn requires --save")
+        view_rerun(stream_name=ns.stream_name, address=ns.address,
+                   channels=ns.channels, save=ns.save, duration=ns.duration,
+                   spawn=not ns.no_spawn, layout=ns.layout)
+        return 0
+
+    p_rerun.set_defaults(func=handle_view_rerun)
+
     # ===============================================
     # BITalino subcommands
     # ===============================================
