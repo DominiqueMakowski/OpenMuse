@@ -15,6 +15,7 @@ dependencies = [
   "mne-lsl>=1.10.0",
   "matplotlib>=3.5.0",
   "vispy>=0.12.0",
+  "pyqt6>=6.5",  # GUI backend for vispy (OpenMuse view)
 ]
 authors = [{ name = "" }]
 classifiers = [
@@ -26,5 +27,11 @@ classifiers = [
 [project.scripts]
 OpenMuse = "OpenMuse.cli:main"
 
+[dependency-groups]
+dev = ["pytest", "pytest-cov", "flake8"]
+
 [tool.setuptools]
 packages = ["OpenMuse"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
