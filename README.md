@@ -25,7 +25,27 @@ This software allows recording, streaming via LSL and visualizing signals from t
 
 ## Installation
 
-Install from GitHub by opening a terminal and running:
+The recommended way is with [uv](https://docs.astral.sh/uv/), which installs `OpenMuse` as an isolated command-line tool (and fetches a suitable Python if needed):
+
+```powershell
+uv tool install git+https://github.com/DominiqueMakowski/OpenMuse
+```
+
+Or run it once without installing:
+
+```powershell
+uvx --from git+https://github.com/DominiqueMakowski/OpenMuse OpenMuse find
+```
+
+For development, clone the repository and use the locked environment:
+
+```powershell
+uv sync
+uv run OpenMuse --help
+uv run pytest
+```
+
+Installing with pip still works:
 
 ```powershell
 pip install https://github.com/DominiqueMakowski/OpenMuse/zipball/main
