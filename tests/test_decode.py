@@ -8,7 +8,7 @@ The new decoder returns numpy arrays with timestamps instead of lists of dicts.
 import unittest
 import os
 import numpy as np
-from OpenMuse.decode import parse_message, decode_rawdata, SENSORS, make_timestamps
+from OpenMuse.decode import parse_message, decode_rawdata, SENSORS, make_timestamps, select_optics_channels
 
 
 class TestGlobalTimestamping(unittest.TestCase):
@@ -269,29 +269,29 @@ class TestDecodeRawdata(unittest.TestCase):
         result = decode_rawdata(messages)
         optics_df = result["OPTICS"]
 
-        # Should have data
-        if len(optics_df) > 0:
-            # Should have correct columns for Optics16
-            expected_columns = [
-                "time",
-                "OPTICS_LO_NIR",
-                "OPTICS_RO_NIR",
-                "OPTICS_LO_IR",
-                "OPTICS_RO_IR",
-                "OPTICS_LI_NIR",
-                "OPTICS_RI_NIR",
-                "OPTICS_LI_IR",
-                "OPTICS_RI_IR",
-                "OPTICS_LO_RED",
-                "OPTICS_RO_RED",
-                "OPTICS_LO_AMB",
-                "OPTICS_RO_AMB",
-                "OPTICS_LI_RED",
-                "OPTICS_RI_RED",
-                "OPTICS_LI_AMB",
-                "OPTICS_RI_AMB",
-            ]
-            self.assertEqual(list(optics_df.columns), expected_columns)
+        self.assertGreater(len(optics_df), 0)
+        expected_columns = [
+            "time",
+            "OPTICS_LI_RED", "OPTICS_RI_RED", "OPTICS_LO_RED", "OPTICS_RO_RED",
+            "OPTICS_LI_AMB", "OPTICS_RI_AMB", "OPTICS_LO_AMB", "OPTICS_RO_AMB",
+            "OPTICS_LI_NIR", "OPTICS_RI_NIR", "OPTICS_LO_NIR", "OPTICS_RO_NIR",
+            "OPTICS_LI_IR", "OPTICS_RI_IR", "OPTICS_LO_IR", "OPTICS_RO_IR",
+        ]
+        self.assertEqual(list(optics_df.columns), expected_columns)
+        self.assertEqual(select_optics_channels(16), expected_columns[1:])
+
+    def test_reduced_optics_channel_order(self):
+        """The Optics16 correction must not relabel unvalidated Optics4/8 packets."""
+        expected = {
+            4: ["OPTICS_LI_NIR", "OPTICS_RI_NIR", "OPTICS_LI_IR", "OPTICS_RI_IR"],
+            8: [
+                "OPTICS_LO_NIR", "OPTICS_RO_NIR", "OPTICS_LO_IR", "OPTICS_RO_IR",
+                "OPTICS_LI_NIR", "OPTICS_RI_NIR", "OPTICS_LI_IR", "OPTICS_RI_IR",
+            ],
+        }
+        for count, channels in expected.items():
+            with self.subTest(count=count):
+                self.assertEqual(select_optics_channels(count), channels)
 
     def test_concatenation(self):
         """Test that multiple messages are properly concatenated with global timestamping."""
