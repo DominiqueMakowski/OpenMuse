@@ -190,19 +190,25 @@ def main(argv=None):
     p_rerun.add_argument("--channels", nargs="+", help="Exact channel labels to display")
     p_rerun.add_argument("--save", metavar="FILE.rrd", help="Also save a Rerun recording")
     p_rerun.add_argument("--duration", type=float, help="Stop after this many seconds")
+    p_rerun.add_argument(
+        "--window", type=float, default=10.0, metavar="SECONDS",
+        help="Initial graph time window in seconds for every pane (default: 10)",
+    )
     p_rerun.add_argument("--no-spawn", action="store_true", help="Save without opening a viewer (requires --save)")
 
     def handle_view_rerun(ns):
         import math
         from .view_rerun import view_rerun
 
+        if not math.isfinite(ns.window) or ns.window <= 0:
+            parser.error("--window must be finite and positive")
         if ns.duration is not None and (not math.isfinite(ns.duration) or ns.duration <= 0):
             parser.error("--duration must be finite and positive")
         if ns.no_spawn and not ns.save:
             parser.error("--no-spawn requires --save")
         view_rerun(stream_name=ns.stream_name, address=ns.address,
                    channels=ns.channels, save=ns.save, duration=ns.duration,
-                   spawn=not ns.no_spawn, layout=ns.layout)
+                   spawn=not ns.no_spawn, layout=ns.layout, window=ns.window)
         return 0
 
     p_rerun.set_defaults(func=handle_view_rerun)

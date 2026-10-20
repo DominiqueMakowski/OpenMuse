@@ -81,3 +81,19 @@ class ViewerCliValidationTests(unittest.TestCase):
                 ):
                     main(["view-rerun", f"--duration={duration}"])
                 self.assertEqual(error.exception.code, 2)
+
+
+    def test_invalid_window_is_rejected_before_stream_discovery(self):
+        from OpenMuse.cli import main
+        from OpenMuse.view_rerun import view_rerun
+
+        for window in ("0", "-1", "nan", "inf", "-inf"):
+            with self.subTest(window=window):
+                with (
+                    contextlib.redirect_stderr(io.StringIO()),
+                    self.assertRaises(SystemExit) as error,
+                ):
+                    main(["view-rerun", f"--window={window}"])
+                self.assertEqual(error.exception.code, 2)
+                with self.assertRaises(ValueError):
+                    view_rerun(window=float(window))

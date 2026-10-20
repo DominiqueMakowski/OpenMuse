@@ -37,8 +37,11 @@ def view_rerun(
     duration: float | None = None,
     spawn: bool = True,
     layout: str = "all",
+    window: float = 10.0,
 ) -> None:
     """Subscribe to existing Muse LSL outlets; never connect to BLE directly."""
+    if not math.isfinite(window) or window <= 0:
+        raise ValueError("window must be finite and positive")
     if layout not in ("all", "eeg", "accgyro", "optics"):
         raise ValueError("layout must be one of: all, eeg, accgyro, optics")
     orientation = layout in ("all", "accgyro")
@@ -64,6 +67,10 @@ def view_rerun(
         orientation_sources: dict[StreamInlet, tuple[str, list[int]]] = {}
         orientation_views = []
         found_channels: set[str] = set()
+        time_range = rr.datatypes.TimeRange(
+            start=rrb.TimeRangeBoundary.cursor_relative(seconds=-window),
+            end=rrb.TimeRangeBoundary.cursor_relative(),
+        )
         for info in sorted(infos, key=lambda info: (info.name, info.source_id, info.uid)):
             inlet = StreamInlet(info, max_buffered=10, processing_flags=None)
             inlets.append(inlet)
@@ -92,7 +99,12 @@ def view_rerun(
                 found_channels.add(label)
                 path = root + "/" + rr.escape_entity_path_part(f"{index}: {label}")
                 selected.append((index, path))
-                views.append(rrb.TimeSeriesView(origin=path, name=f"{info.name}: {label}"))
+                views.append(rrb.TimeSeriesView(
+                    origin=path, name=f"{info.name}: {label}",
+                    axis_x=rrb.TimeAxis(
+                        view_range=time_range, link=rrb.components.LinkAxis.Independent,
+                    ),
+                ))
             sources.append((inlet, selected))
             print(f"Connected: {info.name} ({len(selected)} channels)")
 

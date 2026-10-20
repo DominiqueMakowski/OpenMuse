@@ -7,6 +7,7 @@
 - `view-rerun --layout all|eeg|accgyro|optics` selects the full grid or a sensor-specific layout, composable with device, stream-name, and channel filters.
 - The `all` and `accgyro` Rerun layouts automatically include a gravity-derived roll/pitch coordinate-frame view as an equal-sized grid tile in `all`, or in the left quarter in `accgyro`, with transforms recorded on the LSL timeline. Yaw is fixed to zero; this is a debugging estimate, not full pose tracking.
 - The Rerun pose pane includes a bundled head model derived from the supplied STEP source, moving with the gravity tilt estimate and embedded in saved `.rrd` recordings.
+- `view-rerun --window SECONDS` sets a cursor-relative time window for every graph (default: 10 seconds), preventing live signals from being compressed into an ever-growing display range without trimming recorded data.
 
 ### Changed
 - The standard Rerun dependency requires a platform supported by its binary wheels; see the README for the supported architectures and Linux glibc requirement.

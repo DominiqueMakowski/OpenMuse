@@ -146,6 +146,8 @@ uv run OpenMuse view-rerun
 uv run OpenMuse view-rerun --layout eeg
 uv run OpenMuse view-rerun --layout accgyro
 uv run OpenMuse view-rerun --layout optics
+# Show the last 30 seconds in every graph:
+uv run OpenMuse view-rerun --window 30
 # Filter by stream name and exact channel labels:
 uv run OpenMuse view-rerun --stream-name EEG --channels EEG_TP9 EEG_AF7
 # Optionally filter by Muse device ID:
@@ -162,6 +164,19 @@ For a standalone installation, use the installation instructions above and run
 channels from its matching LSL streams. Layout selection combines with
 `--address`, `--stream-name`, and `--channels`; only channels matching every
 specified filter are displayed. Layout names are case-insensitive.
+
+Every graph initially follows the timeline cursor over the last 10 seconds.
+Use `--window SECONDS` (finite and positive) to set that initial width for all
+graphs. In live-follow mode this is a sliding window; during replay it follows
+the playback cursor. This changes the X-axis display, not the samples saved to
+`.rrd`.
+
+Rerun also exposes time-axis range and linking settings in the selected plot's
+Selection panel. Reopen the right sidebar and select a plot to adjust its X axis.
+Plots start with independent axes so each receives the requested initial range.
+In Rerun 0.29, switching to global linking uses a separate shared range instead
+of `--window`; configure that shared range after linking the plots. GUI changes
+are not written back to the CLI arguments, and restarting resets the layout.
 
 The `all` and `accgyro` layouts automatically include a 3D head model and
 coordinate frames whenever a matching ACCGYRO stream is available:
