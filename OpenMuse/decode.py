@@ -154,23 +154,24 @@ ACCGYRO_CHANNELS = (
     "GYRO_Z",
 )
 
+# Optics16 (0x36) order validated on firmware 3.1.19; see issue #24.
 OPTICS_CHANNELS = (
-    "OPTICS_LO_NIR",
-    "OPTICS_RO_NIR",
-    "OPTICS_LO_IR",
-    "OPTICS_RO_IR",
-    "OPTICS_LI_NIR",
-    "OPTICS_RI_NIR",
-    "OPTICS_LI_IR",
-    "OPTICS_RI_IR",
-    "OPTICS_LO_RED",
-    "OPTICS_RO_RED",
-    "OPTICS_LO_AMB",
-    "OPTICS_RO_AMB",
     "OPTICS_LI_RED",
     "OPTICS_RI_RED",
+    "OPTICS_LO_RED",
+    "OPTICS_RO_RED",
     "OPTICS_LI_AMB",
     "OPTICS_RI_AMB",
+    "OPTICS_LO_AMB",
+    "OPTICS_RO_AMB",
+    "OPTICS_LI_NIR",
+    "OPTICS_RI_NIR",
+    "OPTICS_LO_NIR",
+    "OPTICS_RO_NIR",
+    "OPTICS_LI_IR",
+    "OPTICS_RI_IR",
+    "OPTICS_LO_IR",
+    "OPTICS_RO_IR",
 )
 
 BATTERY_CHANNELS = ("BATTERY_PERCENT",)
@@ -183,8 +184,9 @@ def select_eeg_channels(count: int) -> List[str]:
 
 
 _OPTICS_INDEXES = {
-    4: (4, 5, 6, 7),
-    8: tuple(range(8)),
+    # Preserve the existing Optics4/8 order; issue #24 only validates Optics16.
+    4: (8, 9, 12, 13),
+    8: (10, 11, 14, 15, 8, 9, 12, 13),
     16: tuple(range(16)),
 }
 
@@ -643,7 +645,7 @@ def _decode_optics_data(data_bytes: bytes, n_channels: int) -> Optional[np.ndarr
               Channels: LO_NIR, RO_NIR, LO_IR, RO_IR, LI_NIR, RI_NIR, LI_IR, RI_IR
 
     Optics16: 1 sample × 16 channels = 40 bytes
-              Channels: All 4 sensors × 4 wavelengths (NIR, IR, RED, AMB)
+              Channels: RED, AMB, NIR, IR; each in LI, RI, LO, RO order
 
     Returns: np.ndarray shape (n_samples, n_channels)
     """
