@@ -25,7 +25,32 @@ This software allows recording, streaming via LSL and visualizing signals from t
 
 ## Installation
 
-Install from GitHub by opening a terminal and running:
+The recommended way is with [uv](https://docs.astral.sh/uv/), which installs `OpenMuse` as an isolated command-line tool (and fetches a suitable Python if needed):
+
+```powershell
+uv tool install git+https://github.com/DominiqueMakowski/OpenMuse
+```
+
+`OpenMuse view-rerun` locates the Rerun Viewer inside the same Python environment,
+including isolated `uv tool` installations. A separate global `rerun` install or
+shell PATH change is not required. For an editable local installation, use
+`uv tool install -e .` and then run `OpenMuse view-rerun` directly.
+
+Or run it once without installing:
+
+```powershell
+uvx --from git+https://github.com/DominiqueMakowski/OpenMuse OpenMuse find
+```
+
+For development, clone the repository and use the locked environment:
+
+```powershell
+uv sync
+uv run OpenMuse --help
+uv run pytest
+```
+
+Installing with pip still works:
 
 ```powershell
 pip install https://github.com/DominiqueMakowski/OpenMuse/zipball/main
@@ -103,6 +128,147 @@ To visualize live LSL streams, open a new terminal (while the streaming is runni
 ```powershell
 OpenMuse view
 ```
+
+### Visualize Live Streams with Rerun
+
+Rerun is included in the standard installation. In a development checkout:
+
+```sh
+uv sync
+```
+
+The locked Rerun SDK (0.29.2) provides wheels for Apple Silicon macOS,
+64-bit Linux x86_64/aarch64 (glibc 2.28+), and Windows x86_64; it has no source
+distribution. Since Rerun is a standard dependency in this fork, installation
+requires a supported platform. Intel macOS and 32-bit Raspberry Pi OS are not
+supported by this dependency set.
+
+Keep `OpenMuse stream` running in another terminal, then start the viewer:
+
+```sh
+uv run OpenMuse view-rerun
+# Sensor-specific layouts:
+uv run OpenMuse view-rerun --layout eeg
+uv run OpenMuse view-rerun --layout eeg-aux
+uv run OpenMuse view-rerun --layout eeg-full
+uv run OpenMuse view-rerun --layout accgyro
+uv run OpenMuse view-rerun --layout optics
+# Show the last 30 seconds in every graph:
+uv run OpenMuse view-rerun --window 30
+# Filter by stream name and exact channel labels:
+uv run OpenMuse view-rerun --stream-name EEG --channels EEG_TP9 EEG_AF7
+# Optionally filter by Muse device ID:
+uv run OpenMuse view-rerun --address <your-muse-address>
+```
+
+![Rerun full layout with raw signal channels and a pose tile](media/rerun-all.png)
+
+For a standalone installation, use the installation instructions above and run
+`OpenMuse view-rerun` in the activated environment.
+
+`--layout` selects the following presets (dimensions assume one Muse device):
+
+| Layout | Channels | Grid |
+| --- | --- | --- |
+| `all` (default) | All discovered Muse streams, including AUX | Automatic |
+| `eeg` | `EEG_TP9`, `EEG_AF7`, `EEG_AF8`, `EEG_TP10` | 2 × 2 |
+| `eeg-aux` | `AUX_1` through `AUX_4` | 2 × 2 |
+| `eeg-full` | All EEG-stream channels, including AUX | 4 columns (8 channels on Athena) |
+| `accgyro` | All ACC/GYRO channels | 3 columns, plus the pose pane |
+| `optics` | All optics channels | 4 columns |
+
+All three EEG presets subscribe to the same `Muse-EEG` LSL stream; they do not
+change the device's acquisition settings. Layout selection combines with
+`--address`, `--stream-name`, and `--channels`; only channels matching every
+filter are displayed and saved to `.rrd`. A channel excluded by the layout
+cannot be enabled with `--channels`; use `eeg-full` or `all` to include AUX.
+Layout names are case-insensitive. Use `--address` to select a single device
+when multiple Muse devices are streaming.
+
+Every graph initially follows the timeline cursor over the last 10 seconds.
+Use `--window SECONDS` (finite and positive) to set that initial width for all
+graphs. In live-follow mode this is a sliding window; during replay it follows
+the playback cursor. This changes the X-axis display, not the samples saved to
+`.rrd`.
+
+Rerun also exposes time-axis range and linking settings in the selected plot's
+Selection panel. Reopen the right sidebar and select a plot to adjust its X axis.
+Plots start with independent axes so each receives the requested initial range.
+In Rerun 0.29, switching to global linking uses a separate shared range instead
+of `--window`; configure that shared range after linking the plots. GUI changes
+are not written back to the CLI arguments, and restarting resets the layout.
+
+The `all` and `accgyro` layouts automatically include a 3D head model and
+coordinate frames whenever a matching ACCGYRO stream is available:
+
+```sh
+uv run OpenMuse view-rerun --layout accgyro
+```
+
+![Rerun ACC/GYRO layout with gravity-derived tilt](media/rerun-accgyro.png)
+
+In the `all` layout, each 3D pose pane occupies one grid tile, the same size as a
+signal plot. In the `accgyro` layout, the 3D pane uses the left quarter of the
+viewport and signal plots use the remaining three quarters.
+Pose display requires a matching ACCGYRO stream with `ACC_X`,
+`ACC_Y`, and `ACC_Z` labels. The smaller fixed axes are the reference frame;
+the larger axes show the head-local frame. Red/green/blue indicate X/Y/Z.
+The model uses +X toward the wearer's left, +Y backward, and +Z upward;
+its face points toward −Y. Left/right refer to the wearer, not the screen.
+
+Using the [Muse gravity convention](https://siddhantattavar.com/libmuse/enumcom_1_1choosemuse_1_1libmuse_1_1_accelerometer.html),
+positive `ACC_X` indicates nodding down, positive `ACC_Y` indicates tilting
+toward the wearer's right, and `ACC_Z` is +1 g when level. Before computing
+roll/pitch, the viewer converts gravity to head-local up as
+`(ACC_Y, ACC_X, ACC_Z)` and aligns that vector with reference +Z.
+Yaw is fixed to zero, with no translation or gyro integration.
+
+There is no startup zeroing or mounting-angle correction: `(0, 0, 1)` gives an
+upright model, while nonzero horizontal gravity components remain visible even
+when stationary. This is a gravity-based debugging estimate, not ROS TF,
+calibrated head pose, or a full attitude estimator. Motion acceleration distorts
+the estimate. Zero or non-finite acceleration hides the head model and sensor
+axes until valid data returns.
+
+Transforms use `lsl_time` and are included when `--save` is specified. Channel
+filters affect the scalar plots; tilt still uses all three acceleration channels.
+
+The bundled head model is derived from `OpenMuse/assets/head.step`; the viewer
+loads `head.glb` without requiring CAD software. The STEP surface was tessellated
+with Gmsh (1.5–3 mm mesh size), centered on its mesh bounding box, and uniformly
+scaled to a height of 1.6 viewer units. The model keeps +Z up and its face toward
+−Y. This is a visualization convention, not a measured sensor-to-head calibration.
+The model is embedded in `.rrd` recordings, so replay does not need the source STEP
+or an external model file.
+
+Each selected channel starts in its own time-series pane. Use Rerun's Blueprint
+panel to rearrange panes, select signals, or combine series in a view. Without
+filters, all discovered `Muse-` streams (including multiple devices) are shown.
+At each launch, the command activates a fresh grid for the selected channels,
+replacing any layout Rerun restored from an earlier session.
+The left Blueprint sidebar and right Selection sidebar start collapsed; use the
+top-right panel toggles to reopen them. The bottom timeline remains available.
+Streams are discovered once at startup; restart the command to discover new ones.
+Press Ctrl+C in the terminal to stop receiving.
+
+Values are logged without the original viewer's interpolation, DC removal, or
+normalization. The `lsl_time` timeline preserves the incoming LSL timestamps
+without inlet clock correction or smoothing. It is the publisher's LSL clock,
+not UTC; this viewer does not establish cross-machine clock synchronization or
+recover information already lost upstream in decoding.
+
+Save the received data for inspection in Rerun:
+
+```sh
+uv run OpenMuse view-rerun --save debug.rrd
+# Record for 30 seconds without opening a GUI:
+uv run OpenMuse view-rerun --save debug.rrd --no-spawn --duration 30
+uv run rerun debug.rrd
+```
+
+The Rerun recording contains the selected received channels, not raw BLE packets
+or a lossless acquisition archive. This command does not connect to BLE itself
+and does not require ROS 2.
 
 ### Hyperscanning (Multiple Devices Streaming)
 

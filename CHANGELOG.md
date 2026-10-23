@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `view-rerun` CLI for displaying existing Muse LSL streams in rearrangeable Rerun time-series panes, with stream/device/channel filters and `.rrd` saving. Rerun is included as a standard dependency; no extra installation flags are needed.
+- `view-rerun --layout all|eeg|eeg-aux|eeg-full|accgyro|optics` selects the full grid or a sensor-specific layout, composable with device, stream-name, and channel filters.
+- The `all` and `accgyro` Rerun layouts automatically include a gravity-derived roll/pitch coordinate-frame view as an equal-sized grid tile in `all`, or in the left quarter in `accgyro`, with transforms recorded on the LSL timeline. Yaw is fixed to zero; this is a debugging estimate, not full pose tracking.
+- The Rerun pose pane includes a bundled head model derived from the supplied STEP source, moving with the gravity tilt estimate and embedded in saved `.rrd` recordings.
+- `view-rerun --window SECONDS` sets a cursor-relative time window for every graph (default: 10 seconds), preventing live signals from being compressed into an ever-growing display range without trimming recorded data.
+
+### Changed
+- The standard Rerun dependency requires a platform supported by its binary wheels; see the README for the supported architectures and Linux glibc requirement.
+- The `eeg` layout now shows only the four EEG electrodes in a 2 × 2 grid. Use `eeg-aux` for the four AUX channels or `eeg-full` for the previous eight-channel EEG/AUX view. The default `all` layout still includes AUX.
+
+### Fixed
+- Activate the current `view-rerun` channel grid on startup instead of retaining stale layouts that can show empty plots.
+- Start the Rerun Blueprint and Selection sidebars collapsed while keeping the timeline available.
+- Map Muse forward/right/down gravity into the head model's left/back/up frame before estimating tilt, correcting the swapped forward-nod and side-tilt directions. Keep gravity-based orientation without startup zeroing or mounting-angle correction.
+- Resolve the Rerun Viewer from the current Python environment when spawning it, so `OpenMuse view-rerun` works after `uv tool install -e .` without exposing dependency executables on the shell PATH.
+
 
 ## [0.1.8]
 

@@ -15,16 +15,26 @@ dependencies = [
   "mne-lsl>=1.10.0",
   "matplotlib>=3.5.0",
   "vispy>=0.12.0",
+  "pyqt6>=6.5",  # GUI backend for vispy (OpenMuse view)
+  "rerun-sdk>=0.29,<0.30",
 ]
 authors = [{ name = "" }]
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
 ]
 
 [project.scripts]
 OpenMuse = "OpenMuse.cli:main"
 
+[dependency-groups]
+dev = ["pytest", "pytest-cov", "flake8"]
+
 [tool.setuptools]
-packages = ["OpenMuse"]
+packages = ["OpenMuse", "OpenMuse.assets"]
+
+[tool.setuptools.package-data]
+OpenMuse = ["assets/*.glb", "assets/*.step"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
