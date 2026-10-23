@@ -31,6 +31,11 @@ The recommended way is with [uv](https://docs.astral.sh/uv/), which installs `Op
 uv tool install git+https://github.com/DominiqueMakowski/OpenMuse
 ```
 
+`OpenMuse view-rerun` locates the Rerun Viewer inside the same Python environment,
+including isolated `uv tool` installations. A separate global `rerun` install or
+shell PATH change is not required. For an editable local installation, use
+`uv tool install -e .` and then run `OpenMuse view-rerun` directly.
+
 Or run it once without installing:
 
 ```powershell
@@ -144,6 +149,8 @@ Keep `OpenMuse stream` running in another terminal, then start the viewer:
 uv run OpenMuse view-rerun
 # Sensor-specific layouts:
 uv run OpenMuse view-rerun --layout eeg
+uv run OpenMuse view-rerun --layout eeg-aux
+uv run OpenMuse view-rerun --layout eeg-full
 uv run OpenMuse view-rerun --layout accgyro
 uv run OpenMuse view-rerun --layout optics
 # Show the last 30 seconds in every graph:
@@ -159,11 +166,24 @@ uv run OpenMuse view-rerun --address <your-muse-address>
 For a standalone installation, use the installation instructions above and run
 `OpenMuse view-rerun` in the activated environment.
 
-`--layout` selects `all` (default, automatic grid), `eeg` (4 columns),
-`accgyro` (3 columns), or `optics` (4 columns). Each sensor preset displays all
-channels from its matching LSL streams. Layout selection combines with
+`--layout` selects the following presets (dimensions assume one Muse device):
+
+| Layout | Channels | Grid |
+| --- | --- | --- |
+| `all` (default) | All discovered Muse streams, including AUX | Automatic |
+| `eeg` | `EEG_TP9`, `EEG_AF7`, `EEG_AF8`, `EEG_TP10` | 2 × 2 |
+| `eeg-aux` | `AUX_1` through `AUX_4` | 2 × 2 |
+| `eeg-full` | All EEG-stream channels, including AUX | 4 columns (8 channels on Athena) |
+| `accgyro` | All ACC/GYRO channels | 3 columns, plus the pose pane |
+| `optics` | All optics channels | 4 columns |
+
+All three EEG presets subscribe to the same `Muse-EEG` LSL stream; they do not
+change the device's acquisition settings. Layout selection combines with
 `--address`, `--stream-name`, and `--channels`; only channels matching every
-specified filter are displayed. Layout names are case-insensitive.
+filter are displayed and saved to `.rrd`. A channel excluded by the layout
+cannot be enabled with `--channels`; use `eeg-full` or `all` to include AUX.
+Layout names are case-insensitive. Use `--address` to select a single device
+when multiple Muse devices are streaming.
 
 Every graph initially follows the timeline cursor over the last 10 seconds.
 Use `--window SECONDS` (finite and positive) to set that initial width for all

@@ -182,7 +182,8 @@ def main(argv=None):
         "view-rerun", help="View existing LSL streams in Rerun"
     )
     p_rerun.add_argument(
-        "--layout", type=str.lower, choices=["all", "eeg", "accgyro", "optics"],
+        "--layout", type=str.lower,
+        choices=["all", "eeg", "eeg-aux", "eeg-full", "accgyro", "optics"],
         default="all", help="Channel grid preset (default: all); combines with other filters",
     )
     p_rerun.add_argument("--address", help="Filter Muse device IDs in LSL stream names")

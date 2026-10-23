@@ -1,11 +1,14 @@
 """Display unmodified LSL samples in Rerun."""
 
 import math
+import os
+import sysconfig
 import time
 from importlib.resources import files
 
 import numpy as np
 
+from .decode import EEG_CHANNELS
 from .utils import configure_lsl_api_cfg
 
 
@@ -42,9 +45,15 @@ def view_rerun(
     """Subscribe to existing Muse LSL outlets; never connect to BLE directly."""
     if not math.isfinite(window) or window <= 0:
         raise ValueError("window must be finite and positive")
-    if layout not in ("all", "eeg", "accgyro", "optics"):
-        raise ValueError("layout must be one of: all, eeg, accgyro, optics")
+    if layout not in ("all", "eeg", "eeg-aux", "eeg-full", "accgyro", "optics"):
+        raise ValueError("layout must be one of: all, eeg, eeg-aux, eeg-full, accgyro, optics")
     orientation = layout in ("all", "accgyro")
+    stream_type = "EEG" if layout in ("eeg", "eeg-aux", "eeg-full") else layout.upper()
+    preset_channels = (
+        EEG_CHANNELS[:4] if layout == "eeg"
+        else EEG_CHANNELS[4:] if layout == "eeg-aux"
+        else None
+    )
     import rerun as rr
     import rerun.blueprint as rrb
 
@@ -55,7 +64,7 @@ def view_rerun(
     infos = [info for info in resolve_streams(timeout=2.0)
              if (stream_name in info.name if stream_name else info.name.startswith("Muse-"))
              and (address is None or address in info.name)
-             and (layout == "all" or info.name.startswith(f"Muse-{layout.upper()} ("))]
+             and (layout == "all" or info.name.startswith(f"Muse-{stream_type} ("))]
     if not infos:
         raise RuntimeError("No matching LSL streams found. Start `OpenMuse stream` first.")
 
@@ -94,6 +103,8 @@ def view_rerun(
             selected: list[tuple[int, str]] = []
             for index in range(info.n_channels):
                 label = labels[index] if index < len(labels) and labels[index] else f"channel_{index}"
+                if preset_channels is not None and label not in preset_channels:
+                    continue
                 if channels and label not in channels:
                     continue
                 found_channels.add(label)
@@ -110,11 +121,15 @@ def view_rerun(
 
         missing = set(channels or ()) - found_channels
         if missing:
-            raise ValueError("Unknown channel(s): " + ", ".join(sorted(missing)))
+            raise ValueError("Channel(s) unavailable in selected layout/streams: "
+                             + ", ".join(sorted(missing)))
         if not views:
             raise RuntimeError("No channels selected.")
 
-        grid_columns = {"all": None, "eeg": 4, "accgyro": 3, "optics": 4}[layout]
+        grid_columns = {
+            "all": None, "eeg": 2, "eeg-aux": 2, "eeg-full": 4,
+            "accgyro": 3, "optics": 4,
+        }[layout]
         if layout == "all":
             content = rrb.Grid(*orientation_views, *views)
         else:
@@ -131,7 +146,21 @@ def view_rerun(
         recording = rr.RecordingStream("OpenMuse")
         sinks = []
         if spawn:
-            rr.spawn(connect=False, recording=recording)
+            # uv tool exposes OpenMuse, but not dependency entrypoints such as rerun.
+            # Prefer the Viewer installed alongside this SDK, without changing the
+            # caller's environment after spawning it.
+            original_path = os.environ.get("PATH")
+            scripts = sysconfig.get_path("scripts")
+            os.environ["PATH"] = scripts + (
+                os.pathsep + original_path if original_path else ""
+            )
+            try:
+                rr.spawn(connect=False, recording=recording)
+            finally:
+                if original_path is None:
+                    os.environ.pop("PATH", None)
+                else:
+                    os.environ["PATH"] = original_path
             sinks.append(rr.GrpcSink())
         if save:
             sinks.append(rr.FileSink(save))
