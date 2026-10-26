@@ -109,7 +109,7 @@ Four LSL streams are created:
 - Muse_EEG: 8 channels at 256 Hz (EEG + AUX)
 - Muse_ACCGYRO: 6 channels at 52 Hz (accelerometer + gyroscope)
 - Muse_OPTICS: 16 channels at 64 Hz (PPG sensors)
-- Muse_BATTERY: 1 channel at 0.2 Hz (battery percentage, new firmware)
+- Muse_BATTERY: 1 channel at 1 Hz (battery percentage)
 
 Each stream includes:
 - Channel labels (from decode.py)
@@ -218,7 +218,7 @@ def create_stream_outlet(
         source_id = f"{device_id}_optics"
     elif sensor_type == "BATTERY":
         ch_names = list(BATTERY_CHANNELS)
-        sfreq = 0.2  # New firmware sends battery every 5 seconds
+        sfreq = 1.0  # Both 0x88 and 0x98 status sequences advance once per second.
         stype = "Battery"
         source_id = f"{device_id}_battery"
     else:

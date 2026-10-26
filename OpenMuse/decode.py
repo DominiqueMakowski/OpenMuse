@@ -106,17 +106,15 @@ SENSORS = {
         "rate": 0.0,
         "data_len": 24,
     },
-    # 0x88: New firmware battery/status packet
-    # Contains battery percentage in first 2 bytes, plus additional unknown data
-    # Battery is extracted from this packet for new firmware (replaces 0x98)
-    # NOTE: data_len is set to minimum observed (196 bytes) but actual packets
-    # vary from 188-230 bytes. The decoder only reads first 2 bytes for battery.
+    # New firmware battery/status data is 20 bytes, like 0x98. Longer BLE
+    # packets contain additional tagged sensor subpackets, not a larger status
+    # body. Consuming them as status data loses samples and breaks framing.
     0x88: {
         "type": "BATTERY",
         "n_channels": 1,
         "n_samples": 1,
-        "rate": 0.2,  # ~1 packet every 5-6 seconds (variable)
-        "data_len": 188,  # Minimum observed; actual packets vary 188-230 bytes
+        "rate": 1.0,
+        "data_len": 20,
     },
     0x98: {
         "type": "BATTERY",
@@ -296,8 +294,8 @@ def _parse_packets(payload: bytes, message_time: datetime, uuid: str) -> List[Di
         # Read declared packet length
         pkt_len = payload[offset]
 
-        # Validate we have enough bytes
-        if offset + pkt_len > len(payload):
+        # Reject short declared lengths before accessing header fields.
+        if pkt_len < PACKET_HEADER_SIZE or offset + pkt_len > len(payload):
             break
 
         # Extract full packet
@@ -369,32 +367,26 @@ def _parse_data_subpackets(pkt: Dict) -> List[Dict]:
     """
     subpackets = []
     pkt_data = pkt["pkt_data"]
-    offset = 0
 
-    # Step 1: Parse first data subpacket (no TAG, no header, just raw sensor data)
-    # This is always the sensor type indicated by the packet header
-    if pkt["pkt_valid"] and pkt["pkt_type"] is not None:
-        first_type = pkt["pkt_type"]
-        # Get data length from SENSORS config using pkt_id as TAG
-        first_data_len = SENSORS.get(pkt["pkt_id"], {}).get("data_len", 0)
+    # Without a complete, recognized primary body there is no known boundary
+    # for additional tags. Never reinterpret primary data as subpacket headers.
+    if not pkt["pkt_valid"] or pkt["pkt_type"] is None:
+        return subpackets
+    first_data_len = SENSORS[pkt["pkt_id"]]["data_len"]
+    if len(pkt_data) < first_data_len:
+        return subpackets
 
-        if first_data_len > 0 and offset + first_data_len <= len(pkt_data):
-            # Extract first subpacket data bytes (no TAG, no header)
-            first_data_bytes = pkt_data[offset : offset + first_data_len]
-
-            # Add first subpacket (no index or unknown bytes available)
-            subpackets.append(
-                {
-                    "sensor_type": first_type,
-                    "tag_byte": pkt["pkt_id"],  # Use packet ID as tag for config lookup
-                    "subpkt_index": None,  # First subpacket has no index in data section
-                    "subpkt_unknown": None,  # First subpacket has no unknown bytes
-                    "data_bytes": first_data_bytes,
-                }
-            )
-
-            # Move offset past first data
-            offset += first_data_len
+    # The primary subpacket has no additional TAG or header.
+    subpackets.append(
+        {
+            "sensor_type": pkt["pkt_type"],
+            "tag_byte": pkt["pkt_id"],
+            "subpkt_index": None,
+            "subpkt_unknown": None,
+            "data_bytes": pkt_data[:first_data_len],
+        }
+    )
+    offset = first_data_len
 
     # Step 2: Parse all additional subpackets (each with TAG + 4-byte header + data)
     while offset < len(pkt_data):
@@ -528,7 +520,7 @@ def _decode_battery_data(data_bytes: bytes) -> Optional[np.ndarray]:
 
     Works for both:
     - 0x98 packets (old firmware): ~20 bytes, battery in first 2 bytes
-    - 0x88 packets (new firmware): 188-230 bytes, battery in first 2 bytes
+    - 0x88 packets (new firmware): 20 bytes, battery in first 2 bytes
 
     Returns: np.ndarray shape (1,) with battery percentage
     """

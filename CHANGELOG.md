@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Parse `0x88` status bodies as 20 bytes, preserving following sensor subpackets and battery readings instead of fabricating EEG/OPTICS channel variants.
+- Reject short packet headers and unknown/truncated primary bodies without reinterpreting their payload as tagged sensor subpackets.
+- Restore the observed 1 Hz `0x88` status rate and matching battery LSL nominal rate.
+
 
 ## [0.1.8]
 
